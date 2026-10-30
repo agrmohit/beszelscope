@@ -1,0 +1,58 @@
+{
+  "as_of": "2026-10-30T22:34:59Z",
+  "counts": {
+    "total": 3,
+    "up": 2,
+    "down": 1,
+    "paused": 0,
+    "pending": 0,
+    "with_problems": 2
+  },
+  "systems": [
+    {
+      "name": "alpha",
+      "status": "down",
+      "last_seen_ago_s": 4289,
+      "problems": [
+        {
+          "code": "status_down",
+          "detail": "down for 1h",
+          "section": "summary"
+        }
+      ]
+    },
+    {
+      "name": "bravo",
+      "status": "up",
+      "age_s": 0,
+      "cpu_pct": 7,
+      "mem_pct": 66.8,
+      "disk_pct": 40.1,
+      "load_per_thread": 0.08,
+      "net_bytes_per_s": 152953,
+      "uptime_s": 82953,
+      "agent": "0.21.1",
+      "problems": [
+        {
+          "code": "pool_degraded",
+          "detail": "backup DEGRADED",
+          "section": "disk",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "charlie",
+      "status": "up",
+      "age_s": 0,
+      "cpu_pct": 21.4,
+      "mem_pct": 78.2,
+      "disk_pct": 64.8,
+      "temp_hottest_c": 44.8,
+      "load_per_thread": 0.24,
+      "net_bytes_per_s": 81262,
+      "uptime_s": 171423,
+      "agent": "0.21.1"
+    }
+  ]
+}

@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +43,7 @@ func newClient(t *testing.T, h http.Handler, opts ...func(*Options)) *Client {
 
 func fixture(t *testing.T, name string) []byte {
 	t.Helper()
-	root, err := os.OpenRoot(filepath.Join("testdata", "hub"))
+	root, err := os.OpenRoot("testdata")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,79 +77,85 @@ func TestDecodesFixtures(t *testing.T) {
 		file  string
 		check func(t *testing.T, c *Client, want int)
 	}{
-		{"systems", "systems.json", func(t *testing.T, c *Client, want int) {
+		{"systems", "hub/systems.json", func(t *testing.T, c *Client, want int) {
 			s, err := c.Systems(t.Context())
 			if err != nil || len(s) != want || s[0].Name != "alpha" || s[1].Info.AgentVersion == "" {
 				t.Errorf("got %d systems, err %v, first %+v", len(s), err, s)
 			}
 		}},
-		{"system details", "system_details.json", func(t *testing.T, c *Client, want int) {
+		{"system details", "hub/system_details.json", func(t *testing.T, c *Client, want int) {
 			d, err := c.SystemDetails(t.Context())
 			if err != nil || len(d) != want || d[0].Cores == 0 || d[0].Memory == 0 {
 				t.Errorf("got %d details, err %v", len(d), err)
 			}
 		}},
-		{"containers", "containers.json", func(t *testing.T, c *Client, want int) {
+		{"containers", "hub/containers.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.Containers(t.Context())
 			if err != nil || len(r) != want || r[0].Name == "" || r[0].MemoryMiB == 0 {
 				t.Errorf("got %d containers, err %v", len(r), err)
 			}
 		}},
-		{"services", "systemd_services.json", func(t *testing.T, c *Client, want int) {
+		{"services", "hub/systemd_services.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.Services(t.Context())
 			if err != nil || len(r) != want || r[0].Name == "" || r[0].Updated == 0 {
 				t.Errorf("got %d services, err %v", len(r), err)
 			}
 		}},
-		{"smart devices", "smart_devices.json", func(t *testing.T, c *Client, want int) {
+		{"smart devices", "hub/smart_devices.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.SmartDevices(t.Context())
 			if err != nil || len(r) != want || r[0].State != "PASSED" || len(r[0].Attributes) == 0 || r[0].Updated.IsZero() {
 				t.Errorf("got %d devices, err %v", len(r), err)
 			}
 		}},
-		{"monitors", "network_monitors.json", func(t *testing.T, c *Client, want int) {
+		{"monitors", "hub/network_monitors.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.Monitors(t.Context())
 			if err != nil || len(r) != want || r[0].CertInfo == nil || r[0].ResAvg1h == 0 {
 				t.Errorf("got %d monitors, err %v", len(r), err)
 			}
 		}},
-		{"system stats 1m", "system_stats_bravo_1m.json", func(t *testing.T, c *Client, want int) {
+		{"system stats 1m", "hub/system_stats_bravo_1m.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.SystemStats(t.Context(), bravoID, Stat1m, since)
 			if err != nil || len(r) != want || r[0].Stats.Mem[0] == 0 || r[0].Created.IsZero() {
 				t.Errorf("got %d samples, err %v", len(r), err)
 			}
 		}},
-		{"system stats 480m rollups keep a max", "system_stats_bravo_480m.json", func(t *testing.T, c *Client, want int) {
+		{"system stats 480m rollups keep a max", "hub/system_stats_bravo_480m.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.SystemStats(t.Context(), bravoID, Stat480m, since)
 			if err != nil || len(r) != want || r[len(r)-1].Stats.MaxCPU == 0 {
 				t.Errorf("got %d samples, err %v", len(r), err)
 			}
 		}},
-		{"container stats", "container_stats_bravo_1m.json", func(t *testing.T, c *Client, want int) {
+		{"container stats", "hub/container_stats_bravo_1m.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.ContainerStats(t.Context(), bravoID, Stat1m, since)
 			if err != nil || len(r) != want || len(r[0].Stats) == 0 || r[0].Stats[0].Name == "" {
 				t.Errorf("got %d samples, err %v", len(r), err)
 			}
 		}},
-		{"monitor stats", "network_monitor_stats_bravo_10m.json", func(t *testing.T, c *Client, want int) {
+		{"monitor stats", "hub/network_monitor_stats_bravo_10m.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.MonitorStats(t.Context(), bravoID, Stat10m, since)
 			if err != nil || len(r) != want || r[0].Created == 0 || r[0].Total == 0 {
 				t.Errorf("got %d samples, err %v", len(r), err)
 			}
 		}},
-		{"down system has no latest sample", "system_stats_latest_alpha.json", func(t *testing.T, c *Client, want int) {
+		{"down system has no latest sample", "hub/system_stats_latest_alpha.json", func(t *testing.T, c *Client, want int) {
 			r, err := c.SystemStats(t.Context(), "f00000000000001", Stat1m, since)
 			if err != nil || len(r) != want || want != 0 {
 				t.Errorf("got %d samples, want 0, err %v", len(r), err)
 			}
 		}},
-		{"package updates", "package_updates_bravo.json", func(t *testing.T, c *Client, _ int) {
+		{"zfs pools", "handmade/zfs_pools.json", func(t *testing.T, c *Client, want int) {
+			r, err := c.ZfsPools(t.Context())
+			if err != nil || len(r) != want || r[1].Health != "DEGRADED" || r[1].Vdevs[0].ReadErrs != 3 || r[0].Scrub == nil {
+				t.Errorf("got %d pools, err %v: %+v", len(r), err, r)
+			}
+		}},
+		{"package updates", "hub/package_updates_bravo.json", func(t *testing.T, c *Client, _ int) {
 			p, err := c.PackageUpdates(t.Context(), bravoID)
 			if err != nil || p.Packages == nil {
 				t.Errorf("got %+v, err %v", p, err)
 			}
 		}},
-		{"info", "info.json", func(t *testing.T, c *Client, _ int) {
+		{"info", "hub/info.json", func(t *testing.T, c *Client, _ int) {
 			i, err := c.Info(t.Context())
 			if err != nil || i.Version != "0.21.1" {
 				t.Errorf("got %+v, err %v", i, err)

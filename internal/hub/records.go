@@ -266,6 +266,37 @@ type SmartAttr struct {
 	WhenFailed string `json:"wf"` // non-empty when the attribute failed
 }
 
+// ZfsPool is a storage pool; btrfs pool names start with "b:".
+type ZfsPool struct {
+	System      string `json:"system"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Health      string `json:"health"` // ONLINE, DEGRADED, FAULTED, ...
+	Status      string `json:"status"` // zpool status message
+	Size        uint64 `json:"size"`   // bytes
+	Alloc       uint64 `json:"alloc"`
+	Free        uint64 `json:"free"`
+	Scrub       *Scrub `json:"scrub"`
+	Vdevs       []Vdev `json:"vdevs"`
+	Raw         bool   `json:"raw"` // sizes are physical, not usable
+}
+
+// Scrub is a pool's last scrub.
+type Scrub struct {
+	State    string `json:"state"` // NONE, SCANNING, FINISHED or CANCELED
+	Progress string `json:"progress"`
+	Errors   uint64 `json:"errors"`
+}
+
+// Vdev is one device of a pool.
+type Vdev struct {
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	ReadErrs     uint64 `json:"readErrs"`
+	WriteErrs    uint64 `json:"writeErrs"`
+	ChecksumErrs uint64 `json:"checksumErrs"`
+}
+
 // Monitor is a network monitor with its last hour of results.
 type Monitor struct {
 	ID       string    `json:"id"`
@@ -348,6 +379,12 @@ func (c *Client) Services(ctx context.Context) ([]Service, error) {
 func (c *Client) SmartDevices(ctx context.Context) ([]SmartDevice, error) {
 	return list[SmartDevice](ctx, c, "smart_devices",
 		"system,name,model,type,state,capacity,temp,hours,cycles,attributes,updated", "", "system,name")
+}
+
+// ZfsPools returns every storage pool.
+func (c *Client) ZfsPools(ctx context.Context) ([]ZfsPool, error) {
+	return list[ZfsPool](ctx, c, "zfs_pools",
+		"system,name,display_name,health,status,size,alloc,free,scrub,vdevs,raw", "", "system,name")
 }
 
 // Monitors returns every network monitor.

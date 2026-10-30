@@ -1,0 +1,4 @@
+{"page":1,"perPage":2,"items":[
+{"system":"f00000000000004","name":"tank","display_name":"","health":"ONLINE","status":"","size":4000787030016,"alloc":1200000000000,"free":2800787030016,"scrub":{"state":"FINISHED","progress":"100%","errors":0},"vdevs":[{"name":"mirror-0","state":"ONLINE"}],"raw":false},
+{"system":"f00000000000004","name":"backup","display_name":"Backup","health":"DEGRADED","status":"One or more devices has been removed.","size":2000398934016,"alloc":1500000000000,"free":500398934016,"scrub":{"state":"NONE"},"vdevs":[{"name":"raidz1-0","state":"DEGRADED","readErrs":3,"checksumErrs":1}],"raw":false}
+]}
