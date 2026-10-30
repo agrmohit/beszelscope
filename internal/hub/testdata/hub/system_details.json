@@ -1,0 +1,5 @@
+{"page":1,"perPage":3,"totalItems":3,"totalPages":1,"items":[
+{"arch":"aarch64","collectionId":"pbc_3116237454","collectionName":"system_details","cores":4,"cpu":"Neoverse-N1","hostname":"bravo","id":"f00000000000004","kernel":"7.2.13-200.fc44.aarch64","memory":8086798336,"os":0,"os_name":"Fedora Linux 44 (Forty Four)","podman":false,"sockets":0,"system":"f00000000000004","threads":4,"updated":"2026-10-29 23:39:50.446Z"},
+{"arch":"arm64","collectionId":"pbc_3116237454","collectionName":"system_details","cores":14,"cpu":"Apple M4 Pro","hostname":"charlie.local","id":"f00000000000005","kernel":"","memory":51539607552,"os":1,"os_name":"macOS 27.0.1","podman":false,"sockets":0,"system":"f00000000000005","threads":14,"updated":"2026-10-30 16:05:14.174Z"},
+{"arch":"arm64","collectionId":"pbc_3116237454","collectionName":"system_details","cores":8,"cpu":"Apple M2","hostname":"alpha","id":"f00000000000001","kernel":"","memory":17179869184,"os":1,"os_name":"macOS 27.0.1","podman":false,"sockets":0,"system":"f00000000000001","threads":8,"updated":"2026-10-30 19:33:01.499Z"}
+]}

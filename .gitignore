@@ -8,3 +8,6 @@ coverage.out
 token.txt
 .env
 .env.*
+
+# Private words the fixture leak check refuses to write.
+fixtures.deny

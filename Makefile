@@ -70,8 +70,8 @@ release-check: ## Check TAG is vX.Y.Z, sits on HEAD and has release notes
 	@test -f "docs/releases/$(TAG).md" || { echo "docs/releases/$(TAG).md is missing" >&2; exit 1; }
 	@echo "$(TAG) is on HEAD and has notes"
 
-fixtures: ## Capture and sanitise hub responses into testdata (arrives in step 3)
-	@echo "not implemented yet" >&2; exit 1
+fixtures: ## Capture hub responses, pseudonymise them, write internal/hub/testdata/hub
+	go run ./cmd/fixtures
 
 clean: ## Remove build and coverage output
 	rm -rf bin coverage.out
