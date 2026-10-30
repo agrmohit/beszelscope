@@ -1,0 +1,63 @@
+# Athena RFC 0008 linter set. Every finding blocks; disable a rule rather than ignore it.
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose     # unclosed http.Response bodies leak connections
+    - copyloopvar   # obsolete x := x loop copies
+    - durationcheck # time.Duration * time.Duration bugs
+    - errname       # ErrThing values, ThingError types
+    - errorlint     # %w, errors.Is, errors.As
+    - exhaustive    # enum switches name every constant
+    - forbidigo     # stdout and env guards, see settings
+    - gosec         # security floor
+    - intrange      # for i := range n
+    - musttag       # explicit wire tags on (un)marshalled structs
+    - nilnesserr    # returning a nil error after checking another one
+    - noctx         # outbound calls without a context
+    - nolintlint    # every //nolint names a linter and says why
+    - perfsprint    # Sprintf with cheaper equivalents
+    - revive        # naming and doc comments
+    - sloglint      # consistent log/slog call style
+    - unparam       # parameters that always get the same value
+    - wrapcheck     # errors wrapped at package boundaries
+
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^(fmt\.Print(f|ln)?|print|println)$
+          msg: stdout carries the MCP protocol; log to stderr through slog
+        - pattern: ^os\.(Getenv|LookupEnv|Environ)$
+          msg: only cmd/ reads the environment; pass config in as parameters
+    gosec:
+      excludes:
+        - G104 # unchecked errors; errcheck owns this
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    sloglint:
+      kv-only: false
+      attr-only: true    # one attribute style: slog.String(...), never bare key/value pairs
+      static-msg: true   # messages are fixed event names (RFC 0012)
+      key-naming-case: snake
+      context: scope     # use the ...Context variant when a ctx is in scope
+    wrapcheck:
+      extra-ignore-sigs:
+        - errors.Join(
+
+  exclusions:
+    rules:
+      - path: ^cmd/ # the only place allowed to read the environment
+        linters: [forbidigo]
+        text: only cmd/ reads the environment
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/agrmohit/beszelscope

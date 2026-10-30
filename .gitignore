@@ -1,0 +1,10 @@
+/bin/
+/dist/
+coverage.out
+.DS_Store
+
+# Tokens belong in the Keychain; never let one reach a commit.
+*.token
+token.txt
+.env
+.env.*
