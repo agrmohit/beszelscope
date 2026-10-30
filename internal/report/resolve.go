@@ -41,10 +41,20 @@ func Resolve(systems []hub.System, ref string) (hub.System, error) {
 		case 1:
 			return found[0], nil
 		default:
-			return hub.System{}, fmt.Errorf("%q matches several systems: %s; use one of these IDs", ref, withIDs(found))
+			return hub.System{}, &AmbiguousError{Ref: ref, Matches: found}
 		}
 	}
 	return hub.System{}, fmt.Errorf("no system %q; known: %s", ref, names(systems))
+}
+
+// AmbiguousError means a name matched more than one system.
+type AmbiguousError struct {
+	Ref     string
+	Matches []hub.System
+}
+
+func (e *AmbiguousError) Error() string {
+	return fmt.Sprintf("%q matches several systems: %s; use one of these IDs", e.Ref, withIDs(e.Matches))
 }
 
 func names(systems []hub.System) string {

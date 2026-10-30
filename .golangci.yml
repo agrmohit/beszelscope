@@ -46,6 +46,9 @@ linters:
     wrapcheck:
       extra-ignore-sigs:
         - errors.Join(
+      # Our own packages already return errors with context.
+      ignore-package-globs:
+        - github.com/agrmohit/beszelscope/internal/*
 
   exclusions:
     rules:
