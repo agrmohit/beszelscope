@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
+	"github.com/agrmohit/beszelscope/internal/logctx"
 )
 
 // captured is when the hub fixtures were taken. Tests read it from meta.json
@@ -269,7 +271,7 @@ func connect(t *testing.T, h Hub, opts *mcp.ClientOptions) env {
 	}
 	srv := NewServer(Deps{
 		Hub: h, HubURL: hubURL, HubVersion: "0.21.1", TokenExpiresAt: captured.Add(10 * 365 * 24 * time.Hour),
-		Logger: slog.New(slog.NewJSONHandler(logs, nil)),
+		Logger: slog.New(logctx.Handler{Handler: slog.NewJSONHandler(logs, nil)}),
 		Tracer: sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)),
 		Now:    func() time.Time { return captured }, Version: "test",
 	})
@@ -573,9 +575,21 @@ func TestCallSpan(t *testing.T) {
 				attrs[string(a.Key)] = a.Value.String()
 			}
 			isErr := s.Status().Code.String() == "Error"
-			if s.Name() != "mcp.tools/call fleet_status" || s.SpanKind() != trace.SpanKindServer ||
-				attrs["mcp.tool.arguments"] != `{"problems_only":true}` || isErr != tt.wantError {
-				t.Errorf("span %q kind %v attrs %v error %v", s.Name(), s.SpanKind(), attrs, isErr)
+			// OTel's GenAI semantic conventions for an MCP server span. The
+			// in-memory transport has no session id, so mcp.session.id is absent.
+			if attrs["mcp.protocol.version"] == "" {
+				t.Errorf("no mcp.protocol.version in %v", attrs)
+			}
+			delete(attrs, "mcp.protocol.version")
+			want := map[string]string{
+				"mcp.method.name": "tools/call", "gen_ai.tool.name": "fleet_status", "gen_ai.operation.name": "execute_tool",
+				"network.transport": "pipe", "gen_ai.tool.call.arguments": `{"problems_only":true}`,
+			}
+			if tt.wantError {
+				want["error.type"] = "tool_error"
+			}
+			if s.Name() != "tools/call fleet_status" || s.SpanKind() != trace.SpanKindServer || !maps.Equal(attrs, want) || isErr != tt.wantError {
+				t.Errorf("span %q kind %v error %v\nattrs %v\nwant  %v", s.Name(), s.SpanKind(), isErr, attrs, want)
 			}
 			if tt.wantTrace != "" && s.SpanContext().TraceID().String() != tt.wantTrace {
 				t.Errorf("trace %s, want the client's %s", s.SpanContext().TraceID(), tt.wantTrace)
@@ -595,11 +609,11 @@ func TestCompletionLogAndPanics(t *testing.T) {
 		wantLog   []string
 		wantError string
 	}{
-		{name: "ok", fail: map[string]error{}, wantLog: []string{`"msg":"tool.call.completed"`, `"outcome":"ok"`, `"duration_ms":0`}},
-		{name: "error", fail: map[string]error{"Systems": hub.ErrUnreachable}, wantLog: []string{`"outcome":"error"`}, wantError: "retry later"},
+		{name: "ok", fail: map[string]error{}, wantLog: []string{`"msg":"tool.call.completed"`, `"tool":{"outcome":"ok","cancelled":false}`, `"duration_ms":0`}},
+		{name: "error", fail: map[string]error{"Systems": hub.ErrUnreachable}, wantLog: []string{`"tool":{"outcome":"error","cancelled":false}`}, wantError: "retry later"},
 		{
 			name: "panic is recovered", panicOn: "Systems", fail: map[string]error{},
-			wantLog:   []string{`"msg":"tool.call.panic"`, `"panic":"boom in Systems"`, `"outcome":"error"`},
+			wantLog:   []string{`"msg":"tool.call.panic"`, `"panic":"boom in Systems"`, `"tool":{"outcome":"error","cancelled":false}`},
 			wantError: "internal error in fleet_status",
 		},
 		{
@@ -684,6 +698,40 @@ func TestListing(t *testing.T) {
 				if !strings.Contains(got, w) {
 					t.Errorf("missing %s in %s", w, got)
 				}
+			}
+		})
+	}
+}
+
+// TestCompletionCancelled: the completion line says whether the client gave
+// up on the call before it finished.
+func TestCompletionCancelled(t *testing.T) {
+	tests := []struct {
+		name   string
+		cancel bool
+		want   string
+	}{
+		{name: "finished", want: `"tool":{"outcome":"ok","cancelled":false}`},
+		{name: "client cancelled", cancel: true, want: `"tool":{"outcome":"error","cancelled":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			tl := &tools{
+				d:      Deps{Logger: slog.New(slog.NewJSONHandler(logs, nil)), Now: time.Now},
+				tracer: sdktrace.NewTracerProvider().Tracer("test"),
+			}
+			h := instrument(tl, "fleet_status", func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, struct{}, error) {
+				return nil, struct{}{}, ctx.Err()
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			if tt.cancel {
+				cancel()
+			}
+			defer cancel()
+			_, _, _ = h(ctx, nil, struct{}{})
+			if !strings.Contains(logs.String(), tt.want) {
+				t.Errorf("log lacks %s:\n%s", tt.want, logs)
 			}
 		})
 	}

@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agrmohit/beszelscope/cmd/internal/keychain"
@@ -43,7 +44,7 @@ func serve(ctx context.Context, env map[string]string, stdin io.Reader, stdout, 
 		log.WarnContext(ctx, "telemetry.partial_resource", slog.String("error", tel.warning.Error()))
 	}
 
-	h := newHubClient(cfg, tel.tracer)
+	h := newHubClient(cfg, tel.tracer, log)
 	hubVersion := startup(ctx, tel.tracer.Tracer("github.com/agrmohit/beszelscope/cmd/beszelscope"), log, h, cfg, time.Now())
 
 	srv := mcptools.NewServer(mcptools.Deps{
@@ -77,9 +78,13 @@ func storedToken(ctx context.Context, tokens tokenStore, rawURL string) (string,
 	return tok, nil
 }
 
-func newHubClient(cfg config.Config, tp trace.TracerProvider) *hub.Client {
-	transport := otelhttp.NewTransport(hub.NewTransport(),
+// newHubClient returns the hub client. Each request gets an otelhttp span, a
+// W3C traceparent header and, inside the span, a hub.request log line. The
+// propagator is passed in: otelhttp's default is the global, a no-op here.
+func newHubClient(cfg config.Config, tp trace.TracerProvider, log *slog.Logger) *hub.Client {
+	transport := otelhttp.NewTransport(hub.LogTransport(hub.NewTransport(), log),
 		otelhttp.WithTracerProvider(tp),
+		otelhttp.WithPropagators(propagation.TraceContext{}),
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return r.Method + " " + r.URL.Path }),
 	)
 	return hub.New(hub.Options{

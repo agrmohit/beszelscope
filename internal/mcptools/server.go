@@ -16,9 +16,11 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
+	"github.com/agrmohit/beszelscope/internal/logctx"
 )
 
 // Sent to the client once per session; Claude Code shows it to the model.
@@ -83,15 +85,45 @@ type goroutinePanic struct {
 
 var readOnly = &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: new(false)}
 
+// MCP and GenAI attribute keys from OTel's GenAI semantic conventions for MCP
+// (development status). The Go semconv package no longer carries them;
+// error.type and network.transport still come from it.
+const (
+	mcpMethodNameKey      = attribute.Key("mcp.method.name")
+	genAIToolNameKey      = attribute.Key("gen_ai.tool.name")
+	genAIOperationNameKey = attribute.Key("gen_ai.operation.name")
+	genAIToolCallArgsKey  = attribute.Key("gen_ai.tool.call.arguments")
+	mcpProtocolVersionKey = attribute.Key("mcp.protocol.version")
+	mcpSessionIDKey       = attribute.Key("mcp.session.id")
+)
+
 // instrument wraps a handler with one root span, one completion log line
 // and panic recovery, so every call is traced and none can crash the server.
+// The span follows OTel's MCP server conventions; the tool name is bound to
+// every log line of the call.
 func instrument[In, Out any](t *tools, name string, h mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (res *mcp.CallToolResult, out Out, err error) {
-		ctx = parentFromMeta(ctx, req)
+		ctx = logctx.With(parentFromMeta(ctx, req), slog.String(string(genAIToolNameKey), name))
 		args, _ := json.Marshal(in) // In is a plain struct; this cannot fail
-		ctx, span := t.tracer.Start(ctx, "mcp.tools/call "+name,
+		ctx, span := t.tracer.Start(ctx, "tools/call "+name,
 			trace.WithSpanKind(trace.SpanKindServer),
-			trace.WithAttributes(attribute.String("mcp.tool.name", name), attribute.String("mcp.tool.arguments", string(args))))
+			trace.WithAttributes(
+				mcpMethodNameKey.String("tools/call"),
+				genAIToolNameKey.String(name),
+				genAIOperationNameKey.String("execute_tool"),
+				semconv.NetworkTransportPipe,              // stdio
+				genAIToolCallArgsKey.String(string(args)), // opt-in in semconv; kept by choice
+			))
+		// The SDK does not expose the JSON-RPC request id, so jsonrpc.request.id
+		// is left out. Over stdio there is no session id.
+		if req != nil {
+			if v := req.ProtocolVersion(); v != "" {
+				span.SetAttributes(mcpProtocolVersionKey.String(v))
+			}
+			if req.Session != nil && req.Session.ID() != "" {
+				span.SetAttributes(mcpSessionIDKey.String(req.Session.ID()))
+			}
+		}
 		start := t.d.Now()
 		defer func() {
 			if r := recover(); r != nil {
@@ -99,19 +131,24 @@ func instrument[In, Out any](t *tools, name string, h mcp.ToolHandlerFor[In, Out
 				if gp, ok := r.(*goroutinePanic); ok {
 					value, stack = gp.value, gp.stack
 				}
-				t.d.Logger.ErrorContext(ctx, "tool.call.panic",
-					slog.String("tool", name), slog.Any("panic", value), slog.String("stack", string(stack)))
+				t.d.Logger.ErrorContext(ctx, "tool.call.panic", slog.Any("panic", value), slog.String("stack", string(stack)))
 				res, err = nil, fmt.Errorf("internal error in %s; see beszelscope logs", name)
 			}
 			outcome := "ok"
-			if err != nil {
+			switch {
+			case err != nil:
 				outcome = "error"
+				span.SetAttributes(semconv.ErrorTypeKey.String("tool_error"))
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
+			case res != nil && res.IsError:
+				outcome = "error"
+				span.SetAttributes(semconv.ErrorTypeKey.String("tool_error"))
+				span.SetStatus(codes.Error, "tool returned an error result")
 			}
 			span.End()
 			t.d.Logger.InfoContext(ctx, "tool.call.completed",
-				slog.String("tool", name), slog.String("outcome", outcome),
+				slog.Group("tool", slog.String("outcome", outcome), slog.Bool("cancelled", ctx.Err() != nil)),
 				slog.Int64("duration_ms", t.d.Now().Sub(start).Milliseconds()))
 		}()
 		return h(ctx, req, in)

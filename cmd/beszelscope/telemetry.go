@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agrmohit/beszelscope/internal/logctx"
+
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -87,13 +89,63 @@ func (t *telemetry) flush(ctx context.Context, log *slog.Logger) {
 }
 
 // newLogger returns the JSON logger on w. Every line carries trace_id and
-// span_id from its context. export, when not nil, gets the same records.
+// span_id from its context, and its source file and line. export, when not
+// nil, gets the same records.
 func newLogger(w io.Writer, level slog.Level, export slog.Handler) *slog.Logger {
-	var h slog.Handler = traceHandler{slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level, ReplaceAttr: utcTime})}
+	var h slog.Handler = traceHandler{slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: true, Level: level, ReplaceAttr: utcTime})}
 	if export != nil {
 		h = slog.NewMultiHandler(h, levelHandler{export, level})
 	}
-	return slog.New(h)
+	// Outside both destinations, so neither gets a bound field unredacted.
+	return slog.New(logctx.Handler{Handler: redactHandler{h}})
+}
+
+// denied are attribute keys whose values never reach a log, whatever the
+// call site passes: the backstop behind config.Secret's own LogValue.
+var denied = map[string]bool{
+	"password": true, "authorization": true, "token": true, "api_key": true, "secret": true, "cookie": true,
+}
+
+// redactHandler masks denied keys, at any depth, in every record and in
+// attributes bound with Logger.With. There is no central length cap: one
+// would cut the stack traces of panic records.
+type redactHandler struct{ slog.Handler }
+
+func (h redactHandler) Handle(ctx context.Context, r slog.Record) error {
+	out := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		out.AddAttrs(redact(a))
+		return true
+	})
+	return h.Handler.Handle(ctx, out) //nolint:wrapcheck // a handler passes its inner handler's error through
+}
+
+func (h redactHandler) WithAttrs(as []slog.Attr) slog.Handler {
+	masked := make([]slog.Attr, len(as))
+	for i, a := range as {
+		masked[i] = redact(a)
+	}
+	return redactHandler{h.Handler.WithAttrs(masked)}
+}
+
+func (h redactHandler) WithGroup(name string) slog.Handler {
+	return redactHandler{h.Handler.WithGroup(name)}
+}
+
+func redact(a slog.Attr) slog.Attr {
+	if denied[strings.ToLower(a.Key)] {
+		return slog.String(a.Key, "***")
+	}
+	a.Value = a.Value.Resolve()
+	if a.Value.Kind() == slog.KindGroup {
+		inner := a.Value.Group()
+		masked := make([]slog.Attr, len(inner))
+		for i, g := range inner {
+			masked[i] = redact(g)
+		}
+		return slog.Attr{Key: a.Key, Value: slog.GroupValue(masked...)}
+	}
+	return a
 }
 
 func utcTime(groups []string, a slog.Attr) slog.Attr {

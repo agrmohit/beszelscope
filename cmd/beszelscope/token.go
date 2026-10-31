@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/url"
 	"os"
@@ -27,6 +28,10 @@ const keychainHelp = `Usage:
 
 set, status and delete act on the hub in BESZELSCOPE_URL. No command prints a token.
 `
+
+// quiet drops the hub client's request logs: token commands report to the
+// terminal in plain words, not as JSON log lines.
+var quiet = slog.New(slog.DiscardHandler)
 
 // tokenCmd runs `beszelscope token ...`. tokens is nil off macOS.
 func tokenCmd(ctx context.Context, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer, tokens tokenStore) error {
@@ -82,7 +87,7 @@ func tokenSet(ctx context.Context, env map[string]string, stdin io.Reader, stdou
 	}
 
 	// A failed check only warns: the hub may be down while the token is fine.
-	if info, err := newHubClient(cfg, noop.NewTracerProvider()).Info(ctx); err != nil {
+	if info, err := newHubClient(cfg, noop.NewTracerProvider(), quiet).Info(ctx); err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: the hub check failed, storing anyway: %v\n", err)
 	} else {
 		_, _ = fmt.Fprintf(stdout, "hub accepted the token (Beszel %s)\n", info.Version)
@@ -149,7 +154,7 @@ func tokenStatus(ctx context.Context, env map[string]string, stdout io.Writer, t
 	_, _ = fmt.Fprintf(stdout, "hub      %s\nsource   %s\nuser     %s\ntoken    %s\n",
 		cfg.HubURL, source, cfg.TokenUserID, expiry(time.Now(), cfg.TokenExpiresAt))
 
-	info, err := newHubClient(cfg, noop.NewTracerProvider()).Info(ctx)
+	info, err := newHubClient(cfg, noop.NewTracerProvider(), quiet).Info(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintf(stdout, "check    failed: %v\n", err)
 		return errors.New("the hub check failed")

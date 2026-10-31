@@ -53,6 +53,30 @@ func fakeHub(t *testing.T, status int) string {
 	return srv.URL
 }
 
+// recordingHub is fakeHub(t, 200) that also records the traceparent header
+// of every request, in order.
+func recordingHub(t *testing.T) (url string, traceparents func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Traceparent"))
+		mu.Unlock()
+		if r.URL.Path == "/api/beszel/info" {
+			_, _ = io.WriteString(w, `{"v":"0.21.1"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"items":[]}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+}
+
 // fakeStore is a tokenStore with one token per account. err fails every call.
 type fakeStore struct {
 	tokens map[string]string
@@ -231,8 +255,9 @@ func (s *syncBuffer) String() string {
 
 // TestServeMCP drives the real binary's run over pipes, as Claude Code does.
 func TestServeMCP(t *testing.T) {
+	hubURL, traceparents := recordingHub(t)
 	environ := []string{
-		"BESZELSCOPE_URL=" + fakeHub(t, 200), "BESZELSCOPE_ALLOW_INSECURE_HTTP=1",
+		"BESZELSCOPE_URL=" + hubURL, "BESZELSCOPE_ALLOW_INSECURE_HTTP=1",
 		"BESZELSCOPE_TOKEN=" + makeToken(t, time.Now().Add(365*24*time.Hour)),
 	}
 	inR, inW := io.Pipe()
@@ -270,6 +295,73 @@ func TestServeMCP(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), `"msg":"tool.call.completed"`) {
 		t.Fatalf("no tool.call.completed log:\n%s", stderr.String())
+	}
+	checkTraces(t, stderr.String(), environ[2], traceparents())
+}
+
+// checkTraces proves that tracing is end to end: every hub request is
+// logged, inside the trace of the startup check or the tool call that made
+// it, and carries that trace to the hub in a W3C traceparent header. An
+// orphan span would start a trace of its own.
+func checkTraces(t *testing.T, logs, tokenEnv string, traceparents []string) {
+	t.Helper()
+	traceOf, spanOf := map[string]string{}, map[string]string{} // msg -> IDs, for the one-off lines
+	var requests []map[string]any
+	for line := range strings.Lines(logs) {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("log line is not JSON: %q", line)
+		}
+		msg, _ := rec["msg"].(string)
+		if rec["source"] == nil {
+			t.Errorf("log line %s has no source", msg)
+		}
+		if msg == "hub.request" {
+			requests = append(requests, rec)
+		} else if id, ok := rec["trace_id"].(string); ok {
+			traceOf[msg] = id
+			spanOf[msg], _ = rec["span_id"].(string)
+		}
+		if msg == "tool.call.completed" && rec["gen_ai.tool.name"] != "fleet_status" {
+			t.Errorf("completion line %v lacks gen_ai.tool.name", rec)
+		}
+	}
+	startupTrace, toolTrace := traceOf["startup.ready"], traceOf["tool.call.completed"]
+	if startupTrace == "" || toolTrace == "" || startupTrace == toolTrace {
+		t.Fatalf("startup trace %q, tool trace %q; want two distinct traces", startupTrace, toolTrace)
+	}
+	perTrace := map[string]int{}
+	for _, r := range requests {
+		id, _ := r["trace_id"].(string)
+		// The tool name is bound to the call, so only its requests carry it.
+		if tool, _ := r["gen_ai.tool.name"].(string); (id == toolTrace) != (tool == "fleet_status") {
+			t.Errorf("hub request %v: gen_ai.tool.name %q in trace %s", r, tool, id)
+		}
+		if id != startupTrace && id != toolTrace {
+			t.Errorf("hub request %v is outside the startup and tool traces", r)
+		}
+		// Its own span: the request's, not the startup or tool span around it.
+		span, _ := r["span_id"].(string)
+		if span == "" || span == spanOf["startup.ready"] || span == spanOf["tool.call.completed"] || r["http.response.status_code"] != float64(200) {
+			t.Errorf("hub request %v lacks its own span or a 200", r)
+		}
+		perTrace[id]++
+	}
+	if len(traceparents) != len(requests) {
+		t.Errorf("%d requests reached the hub, %d were logged", len(traceparents), len(requests))
+	}
+	for _, tp := range traceparents {
+		// 00-<trace id>-<span id>-<flags>
+		parts := strings.Split(tp, "-")
+		if len(parts) != 4 || parts[0] != "00" || (parts[1] != startupTrace && parts[1] != toolTrace) {
+			t.Errorf("traceparent %q does not carry the startup or tool trace", tp)
+		}
+	}
+	if perTrace[startupTrace] == 0 || perTrace[toolTrace] == 0 {
+		t.Errorf("hub requests per trace: startup %d, tool %d; want both above 0", perTrace[startupTrace], perTrace[toolTrace])
+	}
+	if token := strings.TrimPrefix(tokenEnv, "BESZELSCOPE_TOKEN="); strings.Contains(logs, token) {
+		t.Error("the token appears in the logs")
 	}
 }
 

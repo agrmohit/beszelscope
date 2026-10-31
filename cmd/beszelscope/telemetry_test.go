@@ -15,6 +15,8 @@ import (
 	"time"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/agrmohit/beszelscope/internal/logctx"
 )
 
 // recorder is a slog handler that keeps the messages it is given.
@@ -198,6 +200,87 @@ func TestExport(t *testing.T) {
 			for _, s := range tt.wantBody {
 				if !bytes.Contains(c.bodies["/v1/traces"], []byte(s)) {
 					t.Fatalf("trace export lacks %q", s)
+				}
+			}
+		})
+	}
+}
+
+// loggable resolves to a group, as a LogValuer type would.
+type loggable struct{}
+
+func (loggable) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("id", "u1"), slog.String("api_key", "k-123"))
+}
+
+// TestRedaction: denied keys are masked at any depth, through every way an
+// attribute reaches a record, in both the stderr line and the export.
+func TestRedaction(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	tests := []struct {
+		name   string
+		log    func(*slog.Logger, context.Context)
+		want   []string
+		absent []string
+	}{
+		{
+			name: "top-level key", log: func(l *slog.Logger, c context.Context) { l.InfoContext(c, "e", slog.String("token", "t-123")) },
+			want: []string{`"token":"***"`}, absent: []string{"t-123"},
+		},
+		{
+			name: "any case", log: func(l *slog.Logger, c context.Context) {
+				l.InfoContext(c, "e", slog.String("Authorization", "Bearer b")) //nolint:sloglint // a mixed-case key is the case under test
+			},
+			want: []string{`"Authorization":"***"`}, absent: []string{"Bearer"},
+		},
+		{
+			name: "inside a group",
+			log: func(l *slog.Logger, c context.Context) {
+				l.InfoContext(c, "e", slog.Group("db", slog.String("password", "p-123")))
+			},
+			want: []string{`"db":{"password":"***"}`}, absent: []string{"p-123"},
+		},
+		{
+			name: "bound with Logger.With", log: func(l *slog.Logger, c context.Context) { l.With(slog.String("secret", "s-123")).InfoContext(c, "e") },
+			want: []string{`"secret":"***"`}, absent: []string{"s-123"},
+		},
+		{
+			name: "bound to the context",
+			log: func(l *slog.Logger, c context.Context) {
+				l.InfoContext(logctx.With(c, slog.String("cookie", "c-123")), "e")
+			},
+			want: []string{`"cookie":"***"`}, absent: []string{"c-123"},
+		},
+		{
+			name: "a LogValuer's group", log: func(l *slog.Logger, c context.Context) { l.InfoContext(c, "e", slog.Any("user", loggable{})) },
+			want: []string{`"user":{"id":"u1","api_key":"***"}`}, absent: []string{"k-123"},
+		},
+		{
+			name: "only whole keys: token_expires_at is kept",
+			log: func(l *slog.Logger, c context.Context) {
+				l.InfoContext(c, "e", slog.String("token_expires_at", "2036"))
+			},
+			want: []string{`"token_expires_at":"2036"`},
+		},
+		{
+			name: "no central cap: a long stack stays whole", log: func(l *slog.Logger, c context.Context) { l.InfoContext(c, "e", slog.String("stack", long)) },
+			want: []string{`"stack":"` + long + `"`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, exported bytes.Buffer
+			tt.log(newLogger(&out, slog.LevelInfo, slog.NewJSONHandler(&exported, nil)), t.Context())
+			for name, got := range map[string]string{"stderr": out.String(), "export": exported.String()} {
+				for _, w := range tt.want {
+					if !strings.Contains(got, w) {
+						t.Errorf("%s lacks %s: %s", name, w, got)
+					}
+				}
+				for _, a := range tt.absent {
+					if strings.Contains(got, a) {
+						t.Errorf("%s leaks %s: %s", name, a, got)
+					}
 				}
 			}
 		})
