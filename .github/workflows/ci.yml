@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Windows defaults to PowerShell; the Makefile needs bash.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: Check
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    # Job-level, so a push to main never cancels a release calling this.
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}-${{ matrix.os }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # gitleaks scans the whole history
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/*.sum
+
+      - run: make check
+        env:
+          ZIZMOR_GITHUB_TOKEN: ${{ github.token }}

@@ -1,0 +1,2 @@
+# Git on Windows checks out CRLF by default; gofmt and the golden-file tests need LF
+* text=auto eol=lf

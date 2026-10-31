@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# A release must not build from a cache a branch could have written.
+cache-mode: none
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-check:
+    name: Check tag and notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - run: make release-check TAG="$GITHUB_REF_NAME"
+
+  ci:
+    name: CI
+    needs: release-check
+    uses: $/.github/workflows/ci.yml
+
+  release:
+    name: Build, attest and publish
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write           # create the release
+      id-token: write           # Sigstore certificate for the attestation
+      attestations: write       # store the attestation
+      artifact-metadata: write  # the attestation's storage record
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - run: make dist VERSION="$GITHUB_REF_NAME"
+
+      # Before the release exists, so no release is ever public unattested.
+      - uses: actions/attest@v4
+        with:
+          subject-checksums: dist/checksums.txt
+
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag --title "$GITHUB_REF_NAME" --notes-file "docs/releases/$GITHUB_REF_NAME.md"

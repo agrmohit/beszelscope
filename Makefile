@@ -14,12 +14,17 @@ export LANG := C.UTF-8
 LINT := go tool -modfile=tools/golangci-lint.mod golangci-lint
 VULN := go tool -modfile=tools/govulncheck.mod govulncheck
 LEAKS := go tool -modfile=tools/gitleaks.mod gitleaks
+ACTIONLINT := go tool -modfile=tools/actionlint.mod actionlint
+# zizmor is a Python package; CI runners have pipx but not uv.
+ZIZMOR_VERSION := 1.31.1
+ZIZMOR := $(if $(shell command -v uvx),uvx zizmor@$(ZIZMOR_VERSION),pipx run zizmor==$(ZIZMOR_VERSION))
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 BIN := bin/beszelscope
+PLATFORMS := darwin/arm64 linux/arm64 linux/amd64 windows/arm64 windows/amd64
 
 .DEFAULT_GOAL := help
-.PHONY: help check lint fmt test coverage vuln tidy-check secrets build install release-check fixtures clean
+.PHONY: help check lint fmt test coverage vuln tidy-check secrets workflows build install dist release-check fixtures clean
 
 help: ## Show this help
 	@awk 'BEGIN { FS = ":.*## " } \
@@ -31,7 +36,7 @@ help: ## Show this help
 		{ doc = "" }' $(MAKEFILE_LIST) \
 		| { printf "\n\033[1mVariables:\033[0m\n"; cat; }
 
-check: tidy-check lint test vuln secrets ## The gate: tidy, lint, race tests, govulncheck, gitleaks
+check: tidy-check lint test vuln secrets workflows ## The gate: tidy, lint, race tests, govulncheck, gitleaks, workflow lint
 
 lint: ## Lint and format-check with golangci-lint
 	$(LINT) run ./...
@@ -56,12 +61,32 @@ secrets: ## Scan git history and the working tree for secrets
 	$(LEAKS) git --redact --no-banner .
 	$(LEAKS) dir --redact --no-banner .
 
+workflows: ## Lint GitHub workflows with actionlint and zizmor
+	@# actionlint v1.7.12 predates `uses: $$/...` and `cache-mode`; drop the
+	@# ignores once a release accepts them.
+	$(ACTIONLINT) -ignore 'reusable workflow call "\$$/' -ignore 'unexpected key "cache-mode"'
+	@# zizmor's online audits need a token, and it rejects an empty one.
+	token="$${ZIZMOR_GITHUB_TOKEN:-$$(gh auth token 2>/dev/null || true)}"; \
+		if [ -n "$$token" ]; then export ZIZMOR_GITHUB_TOKEN="$$token"; fi; \
+		$(ZIZMOR) .github/workflows
+
 build: ## Build bin/beszelscope with the git version stamped in
 	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o $(BIN) ./cmd/beszelscope
 
 install: build ## Install the binary to $(PREFIX)/bin
 	install -d "$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(PREFIX)/bin/beszelscope"
+
+dist: ## Build the release binaries and checksums.txt into dist/
+	rm -rf dist
+	mkdir -p dist
+	for platform in $(PLATFORMS); do \
+		os=$${platform%/*} arch=$${platform#*/}; \
+		case $$os in windows) ext=.exe ;; *) ext= ;; esac; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
+			-o "dist/beszelscope_$(VERSION)_$${os}_$${arch}$$ext" ./cmd/beszelscope; \
+	done
+	cd dist && shasum -a 256 beszelscope_* > checksums.txt
 
 release-check: ## Check TAG is vX.Y.Z, sits on HEAD and has release notes
 	@test -n "$(TAG)" || { echo "set TAG, e.g. make release-check TAG=v0.1.0" >&2; exit 1; }
@@ -74,4 +99,4 @@ fixtures: ## Capture hub responses, pseudonymise them, write internal/hub/testda
 	go run ./cmd/fixtures
 
 clean: ## Remove build and coverage output
-	rm -rf bin coverage.out
+	rm -rf bin dist coverage.out

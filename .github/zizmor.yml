@@ -1,0 +1,7 @@
+# Major tags for GitHub's own actions: only GitHub can move them.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        actions/*: ref-pin
+        "*": hash-pin
