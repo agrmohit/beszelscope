@@ -44,17 +44,19 @@ func fixtureTime() time.Time {
 
 // fakeHub serves fixed records; fail and panicOn make one method misbehave.
 type fakeHub struct {
-	systems    []hub.System
-	services   []hub.Service
-	containers []hub.Container
-	smart      []hub.SmartDevice
-	pools      []hub.ZfsPool
-	monitors   []hub.Monitor
-	details    []hub.SystemDetails
-	stats      []hub.SystemStats
-	packages   map[string]hub.PackageUpdates // by system ID; the captured fixture is empty
-	fail       map[string]error
-	panicOn    string
+	systems        []hub.System
+	services       []hub.Service
+	containers     []hub.Container
+	smart          []hub.SmartDevice
+	pools          []hub.ZfsPool
+	monitors       []hub.Monitor
+	details        []hub.SystemDetails
+	stats          []hub.SystemStats // every type; latest rows plus bravo's history
+	containerStats []hub.ContainerStats
+	monitorStats   []hub.MonitorStats
+	packages       map[string]hub.PackageUpdates // by system ID; the captured fixture is empty
+	fail           map[string]error
+	panicOn        string
 
 	mu    sync.Mutex
 	calls []string // methods called, in any order
@@ -127,19 +129,37 @@ func (f *fakeHub) SystemDetails(context.Context) ([]hub.SystemDetails, error) {
 	return reply(f, "SystemDetails", f.details)
 }
 
-// SystemStats returns the rows of systemID created at or after since.
-func (f *fakeHub) SystemStats(_ context.Context, systemID string, _ hub.StatType, since time.Time) ([]hub.SystemStats, error) {
+// SystemStats returns the rows of systemID and type t created at or after since.
+func (f *fakeHub) SystemStats(_ context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.SystemStats, error) {
 	var out []hub.SystemStats
 	for _, r := range f.stats {
-		if r.System == systemID && !r.Created.Before(since) {
+		if r.System == systemID && r.Type == t && !r.Created.Before(since) {
 			out = append(out, r)
 		}
 	}
 	return reply(f, "SystemStats", out)
 }
 
-func (f *fakeHub) ContainerStats(context.Context, string, hub.StatType, time.Time) ([]hub.ContainerStats, error) {
-	return reply[hub.ContainerStats](f, "ContainerStats", nil)
+// ContainerStats returns the rows of systemID and type t created at or after since.
+func (f *fakeHub) ContainerStats(_ context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.ContainerStats, error) {
+	var out []hub.ContainerStats
+	for _, r := range f.containerStats {
+		if r.System == systemID && r.Type == t && !r.Created.Before(since) {
+			out = append(out, r)
+		}
+	}
+	return reply(f, "ContainerStats", out)
+}
+
+// MonitorStats returns the rows of systemID and type t created at or after since.
+func (f *fakeHub) MonitorStats(_ context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.MonitorStats, error) {
+	var out []hub.MonitorStats
+	for _, r := range f.monitorStats {
+		if r.System == systemID && r.Type == t && r.Created >= since.UnixMilli() {
+			out = append(out, r)
+		}
+	}
+	return reply(f, "MonitorStats", out)
 }
 
 func load[T any](t *testing.T, name string) []T {
@@ -176,6 +196,22 @@ func fixtureHub(t *testing.T) *fakeHub {
 			load[hub.SystemStats](t, "hub/system_stats_latest_alpha.json"),
 			load[hub.SystemStats](t, "hub/system_stats_latest_bravo.json"),
 			load[hub.SystemStats](t, "hub/system_stats_latest_charlie.json"),
+			load[hub.SystemStats](t, "hub/system_stats_bravo_1m.json"),
+			load[hub.SystemStats](t, "hub/system_stats_bravo_10m.json"),
+			load[hub.SystemStats](t, "hub/system_stats_bravo_20m.json"),
+			load[hub.SystemStats](t, "hub/system_stats_bravo_120m.json"),
+			load[hub.SystemStats](t, "hub/system_stats_bravo_480m.json"),
+		),
+		containerStats: slices.Concat(
+			load[hub.ContainerStats](t, "hub/container_stats_bravo_1m.json"),
+			load[hub.ContainerStats](t, "hub/container_stats_bravo_20m.json"),
+		),
+		monitorStats: slices.Concat(
+			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_1m.json"),
+			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_10m.json"),
+			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_20m.json"),
+			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_120m.json"),
+			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_480m.json"),
 		),
 		fail: map[string]error{},
 	}
@@ -603,7 +639,7 @@ func TestListing(t *testing.T) {
 		got  func(t *testing.T) string
 		want []string
 	}{
-		{name: "server instructions", want: []string{"Use fleet_status for the whole fleet", "call system_detail for it directly"}, got: func(*testing.T) string {
+		{name: "server instructions", want: []string{"Use fleet_status for the whole fleet", "call system_detail for it directly", "use metric_history"}, got: func(*testing.T) string {
 			return e.cs.InitializeResult().Instructions
 		}},
 		{name: "fleet_status definition", got: tool("fleet_status"), want: []string{
@@ -616,7 +652,13 @@ func TestListing(t *testing.T) {
 			`"maxItems":8,"type":"array"`, `"enum":["cpu","mem","name"]`, `"maximum":200,"minimum":1`, `"uniqueItems":true`, `"additionalProperties":false`, "one server",
 			"without sections you get summary", "every temperature and fan sensor", "PMU tdie sensors are the CPU dies", "unique prefix works",
 			"listed in gone", "shape the containers and services lists only", "25 when omitted",
-			"security updates first", "natively on Linux",
+			"security updates first", "natively on Linux", "for trends use metric_history",
+		}},
+		{name: "metric_history definition", got: tool("metric_history"), want: []string{
+			`"readOnlyHint":true`, `"required":["systems","metrics"]`, `"enum":["1h","12h","24h","7d","30d"]`,
+			`"maxItems":5,"minItems":1,"type":"array","uniqueItems":true`, `"maxItems":6,"minItems":1,"type":"array","uniqueItems":true`,
+			`"maximum":60,"minimum":0`, `"additionalProperties":false`, "true per-minute maximum", "max_bucket_avg is the highest bucket average",
+			"two series per direction", "error listing the valid ones", "24h when omitted",
 		}},
 	}
 	for _, tt := range tests {
@@ -626,10 +668,6 @@ func TestListing(t *testing.T) {
 				if !strings.Contains(got, w) {
 					t.Errorf("missing %s in %s", w, got)
 				}
-			}
-			// metric_history does not exist yet; naming it made models stall.
-			if strings.Contains(got, "metric_history") {
-				t.Errorf("mentions metric_history: %s", got)
 			}
 		})
 	}

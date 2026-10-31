@@ -1,0 +1,456 @@
+{
+  "12h": {
+    "as_of": "2026-10-30T22:42:22Z",
+    "window": {
+      "span_s": 43200,
+      "resolution_s": 600
+    },
+    "series": [
+      {
+        "system": "bravo",
+        "metric": "net:eth0",
+        "part": "sent",
+        "unit": "bytes_per_s",
+        "avg": 632352.65,
+        "min_bucket_avg": 20285,
+        "max_bucket_avg": 3313315,
+        "high_ago_s": 24741,
+        "last": 760239,
+        "last_ago_s": 141,
+        "buckets": 72,
+        "expected_buckets": 72,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "net:eth0",
+        "part": "recv",
+        "unit": "bytes_per_s",
+        "avg": 900260.42,
+        "min_bucket_avg": 52419,
+        "max_bucket_avg": 3627345,
+        "high_ago_s": 24141,
+        "last": 609484,
+        "last_ago_s": 141,
+        "buckets": 72,
+        "expected_buckets": 72,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "cpu_iowait",
+        "unit": "pct",
+        "avg": 0.5,
+        "min_bucket_avg": 0.07,
+        "max_bucket_avg": 2.14,
+        "high_ago_s": 11541,
+        "last": 0.42,
+        "last_ago_s": 141,
+        "buckets": 72,
+        "expected_buckets": 72,
+        "coverage_pct": 100
+      }
+    ]
+  },
+  "1h": {
+    "as_of": "2026-10-30T22:42:22Z",
+    "window": {
+      "span_s": 3600,
+      "resolution_s": 60
+    },
+    "series": [
+      {
+        "system": "bravo",
+        "metric": "cpu",
+        "unit": "pct",
+        "avg": 8.09,
+        "min_bucket_avg": 4.37,
+        "peak": 30.89,
+        "high_ago_s": 691,
+        "last": 7.04,
+        "last_ago_s": 31,
+        "buckets": 60,
+        "expected_buckets": 60,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "mem",
+        "unit": "pct",
+        "avg": 64.47,
+        "min_bucket_avg": 62.92,
+        "peak": 69.53,
+        "high_ago_s": 811,
+        "last": 66.84,
+        "last_ago_s": 31,
+        "buckets": 60,
+        "expected_buckets": 60,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "monitor:https://example.com/",
+        "unit": "ms",
+        "avg": 149.58,
+        "min_bucket_avg": 69.65,
+        "peak": 228.68,
+        "high_ago_s": 2611,
+        "last": 199.11,
+        "last_ago_s": 211,
+        "loss_pct": 0,
+        "buckets": 6,
+        "expected_buckets": 6,
+        "coverage_pct": 100
+      }
+    ]
+  },
+  "24h": {
+    "as_of": "2026-10-30T22:42:22Z",
+    "window": {
+      "span_s": 86400,
+      "resolution_s": 1200
+    },
+    "series": [
+      {
+        "system": "bravo",
+        "metric": "container:gitea",
+        "part": "cpu",
+        "unit": "pct",
+        "avg": 0.12,
+        "min_bucket_avg": 0.06,
+        "max_bucket_avg": 0.74,
+        "high_ago_s": 85941,
+        "last": 0.06,
+        "last_ago_s": 741,
+        "buckets": 72,
+        "expected_buckets": 72,
+        "coverage_pct": 100,
+        "points": [
+          [
+            72741,
+            0.17
+          ],
+          [
+            58341,
+            0.1
+          ],
+          [
+            43941,
+            0.13
+          ],
+          [
+            29541,
+            0.1
+          ],
+          [
+            15141,
+            0.1
+          ],
+          [
+            741,
+            0.12
+          ]
+        ]
+      },
+      {
+        "system": "bravo",
+        "metric": "container:gitea",
+        "part": "mem",
+        "unit": "bytes",
+        "avg": 210128804.98,
+        "min_bucket_avg": 194940764.16,
+        "max_bucket_avg": 222780456.96,
+        "high_ago_s": 76341,
+        "last": 212871413.76,
+        "last_ago_s": 741,
+        "buckets": 72,
+        "expected_buckets": 72,
+        "coverage_pct": 100,
+        "points": [
+          [
+            72741,
+            212497421.65
+          ],
+          [
+            58341,
+            201073186.13
+          ],
+          [
+            43941,
+            212839082.67
+          ],
+          [
+            29541,
+            210922810.03
+          ],
+          [
+            15141,
+            211489914.88
+          ],
+          [
+            741,
+            211950414.51
+          ]
+        ]
+      },
+      {
+        "system": "bravo",
+        "metric": "swap",
+        "unit": "pct",
+        "avg": 16,
+        "min_bucket_avg": 0,
+        "max_bucket_avg": 29.01,
+        "high_ago_s": 83541,
+        "last": 24.17,
+        "last_ago_s": 741,
+        "buckets": 72,
+        "expected_buckets": 72,
+        "coverage_pct": 100,
+        "points": [
+          [
+            72741,
+            8.78
+          ],
+          [
+            58341,
+            2.04
+          ],
+          [
+            43941,
+            13.53
+          ],
+          [
+            29541,
+            23.61
+          ],
+          [
+            15141,
+            23.89
+          ],
+          [
+            741,
+            24.17
+          ]
+        ]
+      }
+    ]
+  },
+  "30d": {
+    "as_of": "2026-10-30T22:42:22Z",
+    "window": {
+      "span_s": 2592000,
+      "resolution_s": 28800
+    },
+    "series": [
+      {
+        "system": "bravo",
+        "metric": "cpu",
+        "unit": "pct",
+        "avg": 21.25,
+        "min_bucket_avg": 6.09,
+        "peak": 98.09,
+        "high_ago_s": 234141,
+        "last": 6.65,
+        "last_ago_s": 3741,
+        "buckets": 90,
+        "expected_buckets": 90,
+        "coverage_pct": 100,
+        "points": [
+          [
+            2336541,
+            23.99
+          ],
+          [
+            2077341,
+            24.44
+          ],
+          [
+            1818141,
+            25.69
+          ],
+          [
+            1558941,
+            24
+          ],
+          [
+            1299741,
+            22.21
+          ],
+          [
+            1040541,
+            19.11
+          ],
+          [
+            781341,
+            30.48
+          ],
+          [
+            522141,
+            19.59
+          ],
+          [
+            262941,
+            7.26
+          ],
+          [
+            3741,
+            15.69
+          ]
+        ]
+      },
+      {
+        "system": "bravo",
+        "metric": "mem",
+        "unit": "pct",
+        "avg": 74.19,
+        "min_bucket_avg": 60.35,
+        "peak": 83.78,
+        "high_ago_s": 637341,
+        "last": 63.09,
+        "last_ago_s": 3741,
+        "buckets": 90,
+        "expected_buckets": 90,
+        "coverage_pct": 100,
+        "points": [
+          [
+            2336541,
+            76.76
+          ],
+          [
+            2077341,
+            78.06
+          ],
+          [
+            1818141,
+            80.2
+          ],
+          [
+            1558941,
+            75.66
+          ],
+          [
+            1299741,
+            74.63
+          ],
+          [
+            1040541,
+            75.3
+          ],
+          [
+            781341,
+            75.29
+          ],
+          [
+            522141,
+            72.79
+          ],
+          [
+            262941,
+            68.49
+          ],
+          [
+            3741,
+            64.74
+          ]
+        ]
+      }
+    ]
+  },
+  "7d": {
+    "as_of": "2026-10-30T22:42:22Z",
+    "window": {
+      "span_s": 604800,
+      "resolution_s": 7200
+    },
+    "series": [
+      {
+        "system": "bravo",
+        "metric": "cpu",
+        "unit": "pct",
+        "avg": 11.75,
+        "min_bucket_avg": 5.28,
+        "peak": 98.09,
+        "high_ago_s": 262341,
+        "last": 7.12,
+        "last_ago_s": 3141,
+        "buckets": 84,
+        "expected_buckets": 84,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "net",
+        "part": "sent",
+        "unit": "bytes_per_s",
+        "avg": 400421.86,
+        "min_bucket_avg": 33598,
+        "peak": 42842830,
+        "high_ago_s": 197541,
+        "last": 811257,
+        "last_ago_s": 3141,
+        "buckets": 84,
+        "expected_buckets": 84,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "net",
+        "part": "recv",
+        "unit": "bytes_per_s",
+        "avg": 2192604.2,
+        "min_bucket_avg": 174467,
+        "peak": 110103888,
+        "high_ago_s": 233541,
+        "last": 1091873,
+        "last_ago_s": 3141,
+        "buckets": 84,
+        "expected_buckets": 84,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "disk_io",
+        "part": "read",
+        "unit": "bytes_per_s",
+        "avg": 59774.67,
+        "min_bucket_avg": 989,
+        "peak": 39754820,
+        "high_ago_s": 600741,
+        "last": 8541,
+        "last_ago_s": 3141,
+        "buckets": 84,
+        "expected_buckets": 84,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "disk_io",
+        "part": "write",
+        "unit": "bytes_per_s",
+        "avg": 154032.2,
+        "min_bucket_avg": 61554,
+        "peak": 25388032,
+        "high_ago_s": 262341,
+        "last": 90547,
+        "last_ago_s": 3141,
+        "buckets": 84,
+        "expected_buckets": 84,
+        "coverage_pct": 100
+      },
+      {
+        "system": "bravo",
+        "metric": "load",
+        "unit": "load",
+        "avg": 1.01,
+        "min_bucket_avg": 0.35,
+        "max_bucket_avg": 7.8,
+        "high_ago_s": 240741,
+        "last": 0.45,
+        "last_ago_s": 3141,
+        "buckets": 84,
+        "expected_buckets": 84,
+        "coverage_pct": 100
+      }
+    ]
+  }
+}

@@ -23,7 +23,7 @@ const fleetDescription = "Health of every server monitored by the Beszel hub, on
 	"expiring certificates and pending security updates. Each problem names the system_detail section that explains it. " +
 	`Use it for questions about the whole fleet, like "how are my servers" or "is anything wrong"; ` +
 	"for one named server, call system_detail directly. " +
-	"Values are the latest 60 s poll and include no history."
+	"Values are the latest 60 s poll; for trends use metric_history."
 
 type fleetIn struct {
 	Systems      []string `json:"systems,omitempty" jsonschema:"Servers to include, by name or ID; omit for all. Names are case-insensitive and a unique prefix works; an unknown or ambiguous name returns an error listing the valid ones."`

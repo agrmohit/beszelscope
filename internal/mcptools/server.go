@@ -24,7 +24,8 @@ import (
 // Sent to the client once per session; Claude Code shows it to the model.
 const instructions = "Read-only view of a Beszel monitoring hub. Use fleet_status for the whole fleet or when no server is named. " +
 	"When the user names one server, call system_detail for it directly. " +
-	"Each problem fleet_status lists names the system_detail section that explains it."
+	"Each problem fleet_status lists names the system_detail section that explains it. " +
+	"For trends over time (the last hour up to 30 days), use metric_history."
 
 // Hub is the part of the hub client the tools read from.
 type Hub interface {
@@ -37,6 +38,7 @@ type Hub interface {
 	SystemDetails(ctx context.Context) ([]hub.SystemDetails, error)
 	SystemStats(ctx context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.SystemStats, error)
 	ContainerStats(ctx context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.ContainerStats, error)
+	MonitorStats(ctx context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.MonitorStats, error)
 	PackageUpdates(ctx context.Context, systemID string) (hub.PackageUpdates, error)
 }
 
@@ -67,6 +69,7 @@ func NewServer(d Deps) *mcp.Server {
 	t := &tools{d: d, tracer: d.Tracer.Tracer("github.com/agrmohit/beszelscope/internal/mcptools")}
 	addFleet(s, t)
 	addDetail(s, t)
+	addHistory(s, t)
 	return s
 }
 

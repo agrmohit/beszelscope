@@ -34,7 +34,7 @@ const detailDescription = "Current detail for one server monitored by the Beszel
 	"Beszel checks packages only on agents running natively on Linux. " +
 	"filter, problems_only, sort and limit shape the containers and services lists only; " +
 	"problem rows (unhealthy containers, failed units) always come first and are never cut, and hints say when rows were left out. " +
-	"Values are the latest 60 s poll and include no history."
+	"Values are the latest 60 s poll; for trends use metric_history."
 
 type detailIn struct {
 	System       string   `json:"system" jsonschema:"The server, by name or ID. Names are case-insensitive and a unique prefix works; an unknown or ambiguous name returns an error listing the valid ones."`
