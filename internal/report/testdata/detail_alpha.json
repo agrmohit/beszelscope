@@ -45,5 +45,14 @@
     "absent": [
       "pools: no ZFS or btrfs pools"
     ]
+  },
+  "gpu": {
+    "unavailable": "system is down, last seen 1h ago"
+  },
+  "containers": {
+    "unavailable": "system is down, last seen 1h ago"
+  },
+  "services": {
+    "unavailable": "system is down, last seen 1h ago"
   }
 }

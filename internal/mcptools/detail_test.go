@@ -15,7 +15,7 @@ import (
 // TestSystemDetailMatchesReport: over MCP, the structured result is exactly
 // the report package's golden output for the same fixtures.
 func TestSystemDetailMatchesReport(t *testing.T) {
-	both := []any{"summary", "core", "network", "disk"}
+	both := []any{"summary", "core", "network", "disk", "gpu", "containers", "services"}
 	tests := []struct {
 		name   string
 		args   map[string]any
@@ -64,9 +64,11 @@ func TestSystemDetailErrors(t *testing.T) {
 		{name: "empty system", args: map[string]any{"system": ""}, wantErr: "empty system name"},
 		{name: "unknown section", args: map[string]any{"system": "bravo", "sections": []any{"alerts"}}, wantErr: "sections"},
 		{name: "duplicate section", args: map[string]any{"system": "bravo", "sections": []any{"core", "core"}}, wantErr: "sections"},
-		{name: "unknown argument", args: map[string]any{"system": "bravo", "limit": 5}, wantErr: "limit"},
-		// Sensor names do not say what they measure, so there is no filter.
-		{name: "no filter argument", args: map[string]any{"system": "charlie", "filter": "cpu"}, wantErr: "filter"},
+		{name: "unknown argument", args: map[string]any{"system": "bravo", "window": "1h"}, wantErr: "window"},
+		{name: "limit below 1", args: map[string]any{"system": "bravo", "limit": 0}, wantErr: "limit"},
+		{name: "limit above 200", args: map[string]any{"system": "bravo", "limit": 201}, wantErr: "limit"},
+		{name: "unknown sort", args: map[string]any{"system": "bravo", "sort": "size"}, wantErr: "sort"},
+		{name: "filter not a string", args: map[string]any{"system": "bravo", "filter": 3}, wantErr: "filter"},
 		{name: "wrong type", args: map[string]any{"system": []any{"bravo"}}, wantErr: "system"},
 		{name: "token rejected", fail: map[string]error{"Systems": hub.ErrUnauthorized}, args: map[string]any{"system": "bravo"}, wantErr: "beszelscope token set"},
 		{name: "hub unreachable", fail: map[string]error{"Systems": hub.ErrUnreachable}, args: map[string]any{"system": "bravo"}, wantErr: "retry later"},
@@ -164,9 +166,58 @@ func TestSystemDetailReads(t *testing.T) {
 			unread: []string{"SystemStats"},
 		},
 		{
-			name: "every section reads each source once", args: map[string]any{"system": "bravo", "sections": []any{"summary", "core", "network", "disk"}},
-			want: []string{`"summary"`, `"core"`, `"network"`, `"disk"`},
+			name: "every section reads each source once",
+			args: map[string]any{"system": "bravo", "sections": []any{"summary", "core", "network", "disk", "gpu", "containers", "services"}},
+			want: []string{`"summary"`, `"core"`, `"network"`, `"disk"`, `"gpu"`, `"containers"`, `"services"`},
 			once: []string{"Systems", "SystemDetails", "Services", "Containers", "SmartDevices", "ZfsPools", "Monitors", "ContainerStats", "SystemStats"},
+		},
+		{
+			name: "gpu alone: stats only", args: map[string]any{"system": "charlie", "sections": []any{"gpu"}},
+			want:   []string{`"name":"Apple GPU"`},
+			unread: []string{"SystemDetails", "Services", "Containers", "SmartDevices", "ZfsPools", "Monitors", "ContainerStats"},
+			once:   []string{"SystemStats"},
+		},
+		{
+			name: "containers alone: containers and their history only", args: map[string]any{"system": "bravo", "sections": []any{"containers"}},
+			want:   []string{`"truncated":true`, "containers: 10 of 35 rows not shown"},
+			unread: []string{"SystemDetails", "Services", "SmartDevices", "ZfsPools", "Monitors", "SystemStats"},
+			once:   []string{"Containers", "ContainerStats"},
+		},
+		{
+			name: "services alone: services only", args: map[string]any{"system": "bravo", "sections": []any{"services"}},
+			want:   []string{`"failed":0`},
+			unread: []string{"SystemDetails", "Containers", "SmartDevices", "ZfsPools", "Monitors", "ContainerStats", "SystemStats"},
+			once:   []string{"Services"},
+		},
+		{
+			name: "down system lists: nothing read", args: map[string]any{"system": "alpha", "sections": []any{"containers", "services", "gpu"}},
+			want:   []string{`"containers":{"unavailable":"system is down`, `"services":{"unavailable":"system is down`, `"gpu":{"unavailable":"system is down`},
+			unread: []string{"Services", "Containers", "ContainerStats", "SystemStats"},
+		},
+		{
+			name: "containers fail alone: the section says so, no warning", fail: "Containers", args: map[string]any{"system": "bravo", "sections": []any{"containers"}},
+			want: []string{`"unavailable":"could not read containers: HTTP 503"`}, absent: []string{"warnings"},
+		},
+		{
+			name: "containers fail with summary: section and warning", fail: "Containers", args: map[string]any{"system": "bravo", "sections": []any{"summary", "containers"}},
+			want: []string{`"unavailable":"could not read containers: HTTP 503"`, "could not read containers, so related problems may be missing"},
+		},
+		{
+			name: "services fail alone: the section says so, no warning", fail: "Services", args: map[string]any{"system": "bravo", "sections": []any{"services"}},
+			want: []string{`"unavailable":"could not read services: HTTP 503"`}, absent: []string{"warnings"},
+		},
+		{
+			name: "container history fails: rows kept, warning", fail: "ContainerStats", args: map[string]any{"system": "bravo", "sections": []any{"containers"}},
+			want: []string{`"rows":[`, "could not read container history, so stopped containers may be missing"},
+		},
+		{
+			name: "list knobs leave sensors alone", args: map[string]any{"system": "charlie", "sections": []any{"core", "containers"}, "filter": "cpu", "limit": 1},
+			want: []string{`"PMU tdie1"`, `"Apple GPU"`, `no running container's name or image contains \"cpu\"`},
+		},
+		{
+			name: "knobs reach the report", args: map[string]any{"system": "bravo", "sections": []any{"containers"}, "filter": "MINIFLUX", "sort": "name", "problems_only": false, "limit": 1},
+			want:   []string{`"name":"miniflux"`, `"shown":1,"total":35,"truncated":true`, "containers: 1 of 2 rows not shown"},
+			absent: []string{`"name":"miniflux-postgres"`},
 		},
 		{
 			name: "monitors fail: network keeps traffic and warns", fail: "Monitors", args: map[string]any{"system": "bravo", "sections": []any{"network"}},

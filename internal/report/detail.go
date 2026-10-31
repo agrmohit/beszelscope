@@ -11,14 +11,17 @@ import (
 
 // Sections of system_detail, in the order of Beszel's system page tabs.
 const (
-	SectionSummary = "summary"
-	SectionCore    = "core"
-	SectionNetwork = "network"
-	SectionDisk    = "disk"
+	SectionSummary    = "summary"
+	SectionCore       = "core"
+	SectionNetwork    = "network"
+	SectionDisk       = "disk"
+	SectionGPU        = "gpu"
+	SectionContainers = "containers"
+	SectionServices   = "services"
 )
 
 // Sections lists every section system_detail accepts.
-var Sections = []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk}
+var Sections = []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices}
 
 // DetailInput is everything system_detail reads for one system, already
 // fetched. FleetInput carries the problem sources the summary needs.
@@ -27,24 +30,36 @@ type DetailInput struct {
 	System  hub.System
 	Details *hub.SystemDetails // nil when the hub has none
 	Latest  *hub.SystemStats   // newest stats sample; nil when there is none
-	// StatsErr is why the stats read failed; the stats sections say so.
-	StatsErr error
+	// StatsErr, ContainersErr and ServicesErr say why a read failed; the
+	// sections that need it report it.
+	StatsErr      error
+	ContainersErr error
+	ServicesErr   error
 }
 
 // DetailOptions picks what system_detail returns.
 type DetailOptions struct {
 	Sections []string // empty means summary only
+	// The list knobs shape containers and services only.
+	Filter       string // case-insensitive substring of a name or container image; "" keeps all
+	ProblemsOnly bool
+	Sort         string // SortCPU (when ""), SortMem or SortName
+	Limit        int    // rows per list beyond problem rows; 0 means DefaultLimit
 }
 
 // DetailResult is the system_detail output. Only requested sections are set.
 type DetailResult struct {
-	AsOf     time.Time `json:"as_of"`
-	System   SystemRef `json:"system"`
-	Warnings []string  `json:"warnings,omitempty"`
-	Summary  *Summary  `json:"summary,omitempty"`
-	Core     *Core     `json:"core,omitempty"`
-	Network  *Network  `json:"network,omitempty"`
-	Disk     *Disk     `json:"disk,omitempty"`
+	AsOf       time.Time   `json:"as_of"`
+	System     SystemRef   `json:"system"`
+	Warnings   []string    `json:"warnings,omitempty"`
+	Hints      []string    `json:"hints,omitempty"` // which list knob to change when rows were cut or nothing matched
+	Summary    *Summary    `json:"summary,omitempty"`
+	Core       *Core       `json:"core,omitempty"`
+	Network    *Network    `json:"network,omitempty"`
+	Disk       *Disk       `json:"disk,omitempty"`
+	GPU        *GPUs       `json:"gpu,omitempty"`
+	Containers *Containers `json:"containers,omitempty"`
+	Services   *Services   `json:"services,omitempty"`
 }
 
 // SystemRef names the system and how fresh its data is.
@@ -128,6 +143,12 @@ type Swap struct {
 
 // Detail builds the system_detail result for in.System.
 func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
+	if o.Sort != "" && !slices.Contains(Sorts, o.Sort) {
+		return DetailResult{}, fmt.Errorf("unknown sort %q; want one of %s", o.Sort, strings.Join(Sorts, ", "))
+	}
+	if o.Limit < 0 || o.Limit > MaxLimit {
+		return DetailResult{}, fmt.Errorf("limit %d out of range 1-%d", o.Limit, MaxLimit)
+	}
 	s := in.System
 	row := buildRow(in.FleetInput, s)
 	out := DetailResult{
@@ -153,6 +174,16 @@ func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
 			out.Network = network(in)
 		case SectionDisk:
 			out.Disk = disk(in)
+		case SectionGPU:
+			out.GPU = gpus(in)
+		case SectionContainers:
+			var hint string
+			out.Containers, hint = containers(in, o)
+			out.Hints = appendNonEmpty(out.Hints, hint)
+		case SectionServices:
+			var hint string
+			out.Services, hint = services(in, o)
+			out.Hints = appendNonEmpty(out.Hints, hint)
 		default:
 			return DetailResult{}, fmt.Errorf("unknown section %q; want one of %s", sec, strings.Join(Sections, ", "))
 		}

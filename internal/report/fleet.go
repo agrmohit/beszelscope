@@ -269,30 +269,12 @@ func structural(in FleetInput, s hub.System) []Problem {
 		}
 	}
 
-	present := map[string]bool{}
 	for _, c := range in.Containers {
-		if c.System != s.ID {
-			continue
-		}
-		present[c.Name] = true
-		switch {
-		case in.Now.Sub(time.UnixMilli(c.Updated)) > containerStaleAfter:
-			gone = append(gone, c.Name) // stopped: no longer reported
-		case c.Health == 3:
+		if c.System == s.ID && c.Health == 3 && !containerStale(in.Now, c) {
 			unhealthy = append(unhealthy, c.Name)
 		}
 	}
-	for _, cs := range in.RecentContainers {
-		if cs.System != s.ID {
-			continue
-		}
-		for _, st := range cs.Stats {
-			if !present[st.Name] {
-				present[st.Name] = true
-				gone = append(gone, st.Name) // ran in the last hour, gone now
-			}
-		}
-	}
+	gone = goneContainers(in, s.ID)
 
 	for _, d := range in.Smart {
 		if d.System != s.ID {

@@ -168,6 +168,16 @@ func TestFleetProblems(t *testing.T) {
 			want: []string{"web: container_gone(1)@containers: app"},
 		},
 		{
+			// Recreating a container gives it a new ID, so Beszel keeps the
+			// old row for 10 minutes beside the live one.
+			name: "recreated container: stale old row beside a live one is not gone",
+			in: FleetInput{Systems: []hub.System{sys}, Containers: []hub.Container{
+				{System: sys.ID, Name: "app", Updated: now.Add(-5 * time.Minute).UnixMilli()},
+				{System: sys.ID, Name: "app", Updated: now.Add(-10 * time.Second).UnixMilli()},
+			}},
+			want: nil,
+		},
+		{
 			name: "container ran in the last hour, gone now",
 			in: FleetInput{
 				Systems:    []hub.System{sys},

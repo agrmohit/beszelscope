@@ -201,5 +201,271 @@
     "absent": [
       "pools: no ZFS or btrfs pools"
     ]
+  },
+  "gpu": {
+    "sampled_ago_s": 30,
+    "gpus": [
+      {
+        "id": "0",
+        "name": "Apple GPU",
+        "usage_pct": 15.9,
+        "power_w": 1.41
+      }
+    ]
+  },
+  "containers": {
+    "counts": {
+      "total": 24,
+      "shown": 24,
+      "truncated": false
+    },
+    "unhealthy": 0,
+    "rows": [
+      {
+        "name": "app-19",
+        "image": "example/app-19:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 4.54,
+        "mem_bytes": 1087006310,
+        "net_bytes_per_s": 24702,
+        "age_s": 30
+      },
+      {
+        "name": "app-12",
+        "image": "example/app-12:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 2.12,
+        "mem_bytes": 809081241,
+        "net_bytes_per_s": 3072,
+        "age_s": 30
+      },
+      {
+        "name": "app-17",
+        "image": "example/app-17:latest",
+        "status": "Up 36 hours",
+        "health": "healthy",
+        "cpu_pct": 0.84,
+        "mem_bytes": 948195819,
+        "net_bytes_per_s": 117,
+        "age_s": 30
+      },
+      {
+        "name": "app-5",
+        "image": "example/app-5:latest",
+        "status": "Up 36 hours",
+        "health": "healthy",
+        "cpu_pct": 0.68,
+        "mem_bytes": 289669120,
+        "net_bytes_per_s": 2766,
+        "age_s": 30
+      },
+      {
+        "name": "app-16",
+        "image": "example/app-16:latest",
+        "status": "Up 3 hours",
+        "health": "healthy",
+        "cpu_pct": 0.55,
+        "mem_bytes": 1761628651,
+        "net_bytes_per_s": 6217,
+        "age_s": 30
+      },
+      {
+        "name": "vaultwarden",
+        "image": "vaultwarden/server:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 0.37,
+        "mem_bytes": 20656947,
+        "net_bytes_per_s": 18,
+        "age_s": 30
+      },
+      {
+        "name": "app-20",
+        "image": "example/app-20:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 0.34,
+        "mem_bytes": 630582149,
+        "net_bytes_per_s": 1793,
+        "age_s": 30
+      },
+      {
+        "name": "app-9",
+        "image": "example/app-9:latest",
+        "status": "Up 36 hours",
+        "health": "healthy",
+        "cpu_pct": 0.31,
+        "mem_bytes": 4676648,
+        "net_bytes_per_s": 8,
+        "age_s": 30
+      },
+      {
+        "name": "app-26",
+        "image": "example/app-26:latest",
+        "status": "Up 7 hours",
+        "health": "none",
+        "cpu_pct": 0.28,
+        "mem_bytes": 737840988,
+        "net_bytes_per_s": 3113,
+        "age_s": 30
+      },
+      {
+        "name": "app-15",
+        "image": "example/app-15:latest",
+        "status": "Up 2 days",
+        "health": "none",
+        "cpu_pct": 0.27,
+        "mem_bytes": 115028787,
+        "net_bytes_per_s": 18780,
+        "age_s": 30
+      },
+      {
+        "name": "app-21",
+        "image": "example/app-21:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 0.24,
+        "mem_bytes": 70401392,
+        "net_bytes_per_s": 2638,
+        "age_s": 30
+      },
+      {
+        "name": "app-6",
+        "image": "example/app-6:latest",
+        "status": "Up 36 hours",
+        "health": "none",
+        "cpu_pct": 0.23,
+        "mem_bytes": 273730764,
+        "net_bytes_per_s": 8960,
+        "age_s": 30
+      },
+      {
+        "name": "app-8",
+        "image": "example/app-8:latest",
+        "status": "Up 36 hours",
+        "health": "healthy",
+        "cpu_pct": 0.22,
+        "mem_bytes": 34267463,
+        "net_bytes_per_s": 1764,
+        "age_s": 30
+      },
+      {
+        "name": "app-27",
+        "image": "example/app-27:latest",
+        "status": "Up 31 hours",
+        "health": "none",
+        "cpu_pct": 0.21,
+        "mem_bytes": 416158842,
+        "net_bytes_per_s": 2456,
+        "age_s": 30
+      },
+      {
+        "name": "app-22",
+        "image": "example/app-22:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 0.18,
+        "mem_bytes": 9237954,
+        "net_bytes_per_s": 409,
+        "age_s": 30
+      },
+      {
+        "name": "app-14",
+        "image": "example/app-14:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 0.15,
+        "mem_bytes": 816222044,
+        "net_bytes_per_s": 0,
+        "age_s": 30
+      },
+      {
+        "name": "app-23",
+        "image": "example/app-23:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 0.1,
+        "mem_bytes": 14973665,
+        "net_bytes_per_s": 0,
+        "age_s": 30
+      },
+      {
+        "name": "app-18",
+        "image": "example/app-18:latest",
+        "status": "Up 2 days",
+        "health": "healthy",
+        "cpu_pct": 0.09,
+        "mem_bytes": 18759024,
+        "net_bytes_per_s": 0,
+        "age_s": 30
+      },
+      {
+        "name": "app-25",
+        "image": "example/app-25:latest",
+        "status": "Up 3 hours",
+        "health": "healthy",
+        "cpu_pct": 0.09,
+        "mem_bytes": 580858675,
+        "net_bytes_per_s": 0,
+        "age_s": 30
+      },
+      {
+        "name": "app-10",
+        "image": "example/app-10:latest",
+        "status": "Up 36 hours",
+        "health": "none",
+        "cpu_pct": 0.04,
+        "mem_bytes": 273772707,
+        "net_bytes_per_s": 684,
+        "age_s": 30
+      },
+      {
+        "name": "app-11",
+        "image": "example/app-11:latest",
+        "status": "Up 36 hours",
+        "health": "none",
+        "cpu_pct": 0.04,
+        "mem_bytes": 276111032,
+        "net_bytes_per_s": 638,
+        "age_s": 30
+      },
+      {
+        "name": "app-13",
+        "image": "example/app-13:latest",
+        "status": "Up 2 days",
+        "health": "none",
+        "cpu_pct": 0.02,
+        "mem_bytes": 15047065,
+        "net_bytes_per_s": 151,
+        "age_s": 30
+      },
+      {
+        "name": "app-7",
+        "image": "example/app-7:latest",
+        "status": "Up 36 hours",
+        "health": "none",
+        "cpu_pct": 0.01,
+        "mem_bytes": 262552944,
+        "net_bytes_per_s": 0,
+        "age_s": 30
+      },
+      {
+        "name": "app-24",
+        "image": "example/app-24:latest",
+        "status": "Up 2 days",
+        "health": "none",
+        "cpu_pct": 0,
+        "mem_bytes": 7014973,
+        "net_bytes_per_s": 53,
+        "age_s": 30
+      }
+    ]
+  },
+  "services": {
+    "absent": [
+      "services: none reported; Beszel reads systemd units on Linux only"
+    ]
   }
 }

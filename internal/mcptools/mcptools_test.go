@@ -604,9 +604,10 @@ func TestListing(t *testing.T) {
 			`"items":{"type":"string"},"maxItems":20,"type":"array"`, "unique prefix works",
 		}},
 		{name: "system_detail definition", got: tool("system_detail"), want: []string{
-			`"readOnlyHint":true`, `"openWorldHint":false`, `"required":["system"]`, `"enum":["summary","core","network","disk"]`,
-			`"maxItems":4,"type":"array"`, `"uniqueItems":true`, `"additionalProperties":false`, "one server",
+			`"readOnlyHint":true`, `"openWorldHint":false`, `"required":["system"]`, `"enum":["summary","core","network","disk","gpu","containers","services"]`,
+			`"maxItems":7,"type":"array"`, `"enum":["cpu","mem","name"]`, `"maximum":200,"minimum":1`, `"uniqueItems":true`, `"additionalProperties":false`, "one server",
 			"without sections you get summary", "every temperature and fan sensor", "PMU tdie sensors are the CPU dies", "unique prefix works",
+			"listed in gone", "shape the containers and services lists only", "25 when omitted",
 		}},
 	}
 	for _, tt := range tests {

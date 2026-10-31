@@ -2,6 +2,7 @@ package report
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -202,5 +203,322 @@ func TestSmartName(t *testing.T) {
 				t.Fatalf("smartName(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDetailGPU(t *testing.T) {
+	up := upSystem()
+	tests := []struct {
+		name     string
+		sys      hub.System
+		latest   *hub.SystemStats
+		statsErr error
+		want     string
+	}{
+		{
+			name: "by id; MiB to bytes; unreported fields omitted", sys: up,
+			latest: sample(func(x *hub.Stats) {
+				x.GPU = map[string]hub.GPU{
+					"1": {Name: "Intel UHD", Usage: 0},
+					"0": {Name: "RTX 3060", Usage: 37.46, MemUsedMB: 2048.5, MemTotalMB: 12288, PowerW: 45.123},
+				}
+			}),
+			want: `{"sampled_ago_s":30,"gpus":[{"id":"0","name":"RTX 3060","usage_pct":37.5,"mem_used_bytes":2148007936,"mem_total_bytes":12884901888,"power_w":45.12},{"id":"1","name":"Intel UHD","usage_pct":0}]}`,
+		},
+		{
+			name: "Mac: power, no memory", sys: up,
+			latest: sample(func(x *hub.Stats) { x.GPU = map[string]hub.GPU{"0": {Name: "Apple GPU", Usage: 15.91, PowerW: 1.41}} }),
+			want:   `{"sampled_ago_s":30,"gpus":[{"id":"0","name":"Apple GPU","usage_pct":15.9,"power_w":1.41}]}`,
+		},
+		{name: "no GPU", sys: up, latest: sample(nil), want: `{"sampled_ago_s":30,"absent":["gpus: none reported by this host"]}`},
+		{name: "down system", sys: down(), latest: sample(nil), want: `{"unavailable":"system is down, last seen 19m ago"}`},
+		{name: "stats read failed", sys: up, statsErr: errors.New("HTTP 503"), want: `{"unavailable":"could not read stats: HTTP 503"}`},
+		{name: "no recent sample", sys: up, want: `{"unavailable":"the hub has no stats sample from the last 5 minutes"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
+			r, err := Detail(in, DetailOptions{Sections: []string{SectionGPU}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := asJSON(t, r.GPU); got != tt.want {
+				t.Fatalf("got  %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// listResult is a list section and its hint as one JSON string.
+func listResult(t *testing.T, r DetailResult, section any) string {
+	t.Helper()
+	return asJSON(t, map[string]any{"section": section, "hints": r.Hints})
+}
+
+func TestDetailContainers(t *testing.T) {
+	up := upSystem()
+	ctr := func(name string, cpu, memMiB float64, f func(*hub.Container)) hub.Container {
+		c := hub.Container{
+			System: up.ID, Name: name, Image: name + ":1", Status: "Up 2 hours", Health: 2,
+			CPU: cpu, MemoryMiB: memMiB, NetBytes: 1500.7, Updated: now.Add(-20 * time.Second).UnixMilli(),
+		}
+		if f != nil {
+			f(&c)
+		}
+		return c
+	}
+	unhealthy := func(c *hub.Container) { c.Health = 3 }
+	row := func(name string, cpu float64, memBytes int, problem bool) string {
+		health, problems := "healthy", ""
+		if problem {
+			health, problems = "unhealthy", `,"problems":["container_unhealthy"]`
+		}
+		return `{"name":"` + name + `","image":"` + name + `:1","status":"Up 2 hours","health":"` + health + `","cpu_pct":` +
+			strconv.FormatFloat(cpu, 'f', -1, 64) + `,"mem_bytes":` + strconv.Itoa(memBytes) + `,"net_bytes_per_s":1500,"age_s":20` + problems + `}`
+	}
+	three := []hub.Container{ctr("a", 0.5, 100, nil), ctr("b", 2, 10, nil), ctr("c", 1, 50, nil)}
+	five := []hub.Container{
+		ctr("h1", 3, 1, nil), ctr("h2", 2, 1, nil),
+		ctr("u1", 0.1, 1, unhealthy), ctr("u2", 0.2, 1, unhealthy), ctr("u3", 0.3, 1, unhealthy),
+	}
+	tests := []struct {
+		name       string
+		sys        hub.System
+		containers []hub.Container
+		recent     []hub.ContainerStats
+		readErr    error
+		opts       DetailOptions
+		want       string
+	}{
+		{
+			name: "default sort is cpu, highest first; MiB to bytes", sys: up, containers: three,
+			want: `{"hints":null,"section":{"counts":{"total":3,"shown":3,"truncated":false},"unhealthy":0,"rows":[` +
+				row("b", 2, 10485760, false) + `,` + row("c", 1, 52428800, false) + `,` + row("a", 0.5, 104857600, false) + `]}}`,
+		},
+		{
+			name: "sort mem", sys: up, containers: three, opts: DetailOptions{Sort: SortMem},
+			want: `{"hints":null,"section":{"counts":{"total":3,"shown":3,"truncated":false},"unhealthy":0,"rows":[` +
+				row("a", 0.5, 104857600, false) + `,` + row("c", 1, 52428800, false) + `,` + row("b", 2, 10485760, false) + `]}}`,
+		},
+		{
+			name: "sort name", sys: up, containers: []hub.Container{three[2], three[1], three[0]}, opts: DetailOptions{Sort: SortName},
+			want: `{"hints":null,"section":{"counts":{"total":3,"shown":3,"truncated":false},"unhealthy":0,"rows":[` +
+				row("a", 0.5, 104857600, false) + `,` + row("b", 2, 10485760, false) + `,` + row("c", 1, 52428800, false) + `]}}`,
+		},
+		{
+			name: "equal cpu ties by name", sys: up, containers: []hub.Container{ctr("z", 1, 1, nil), ctr("m", 1, 1, nil)},
+			want: `{"hints":null,"section":{"counts":{"total":2,"shown":2,"truncated":false},"unhealthy":0,"rows":[` +
+				row("m", 1, 1048576, false) + `,` + row("z", 1, 1048576, false) + `]}}`,
+		},
+		{
+			name: "problem rows first, then cpu", sys: up, containers: five,
+			want: `{"hints":null,"section":{"counts":{"total":5,"shown":5,"truncated":false},"unhealthy":3,"rows":[` +
+				row("u3", 0.3, 1048576, true) + `,` + row("u2", 0.2, 1048576, true) + `,` + row("u1", 0.1, 1048576, true) + `,` +
+				row("h1", 3, 1048576, false) + `,` + row("h2", 2, 1048576, false) + `]}}`,
+		},
+		{
+			name: "limit below the problem count keeps every problem row", sys: up, containers: five, opts: DetailOptions{Limit: 2},
+			want: `{"hints":["containers: 2 of 5 rows not shown; raise limit (max 200) or use filter"],"section":{"counts":{"total":5,"shown":3,"truncated":true},"unhealthy":3,"rows":[` +
+				row("u3", 0.3, 1048576, true) + `,` + row("u2", 0.2, 1048576, true) + `,` + row("u1", 0.1, 1048576, true) + `]}}`,
+		},
+		{
+			name: "limit one past the problem rows", sys: up, containers: five, opts: DetailOptions{Limit: 4},
+			want: `{"hints":["containers: 1 of 5 rows not shown; raise limit (max 200) or use filter"],"section":{"counts":{"total":5,"shown":4,"truncated":true},"unhealthy":3,"rows":[` +
+				row("u3", 0.3, 1048576, true) + `,` + row("u2", 0.2, 1048576, true) + `,` + row("u1", 0.1, 1048576, true) + `,` +
+				row("h1", 3, 1048576, false) + `]}}`,
+		},
+		{
+			name: "limit equal to the row count cuts nothing", sys: up, containers: three, opts: DetailOptions{Limit: 3},
+			want: `{"hints":null,"section":{"counts":{"total":3,"shown":3,"truncated":false},"unhealthy":0,"rows":[` +
+				row("b", 2, 10485760, false) + `,` + row("c", 1, 52428800, false) + `,` + row("a", 0.5, 104857600, false) + `]}}`,
+		},
+		{
+			name: "problems only", sys: up, containers: five, opts: DetailOptions{ProblemsOnly: true, Sort: SortName},
+			want: `{"hints":null,"section":{"counts":{"total":5,"shown":3,"truncated":false},"unhealthy":3,"rows":[` +
+				row("u1", 0.1, 1048576, true) + `,` + row("u2", 0.2, 1048576, true) + `,` + row("u3", 0.3, 1048576, true) + `]}}`,
+		},
+		{
+			name: "problems only with none", sys: up, containers: three, opts: DetailOptions{ProblemsOnly: true},
+			want: `{"hints":null,"section":{"counts":{"total":3,"shown":0,"truncated":false},"unhealthy":0}}`,
+		},
+		{
+			name: "filter on name ignores case", sys: up, containers: five, opts: DetailOptions{Filter: "H"},
+			want: `{"hints":null,"section":{"counts":{"total":5,"shown":2,"truncated":false},"unhealthy":3,"rows":[` +
+				row("h1", 3, 1048576, false) + `,` + row("h2", 2, 1048576, false) + `]}}`,
+		},
+		{
+			name: "filter on image finds a container named otherwise", sys: up,
+			containers: []hub.Container{ctr("db", 1, 1, func(c *hub.Container) { c.Image = "postgres:18" }), ctr("web", 1, 1, nil)},
+			opts:       DetailOptions{Filter: "Postgres"},
+			want:       `{"hints":null,"section":{"counts":{"total":2,"shown":1,"truncated":false},"unhealthy":0,"rows":[{"name":"db","image":"postgres:18","status":"Up 2 hours","health":"healthy","cpu_pct":1,"mem_bytes":1048576,"net_bytes_per_s":1500,"age_s":20}]}}`,
+		},
+		{
+			name: "filter matches nothing: hint says only running containers exist", sys: up, containers: three, opts: DetailOptions{Filter: "redis"},
+			want: `{"hints":["containers: no running container's name or image contains \"redis\"; Beszel lists only running containers"],"section":{"counts":{"total":3,"shown":0,"truncated":false},"unhealthy":0}}`,
+		},
+		{
+			name: "filter matching only a stopped container: listed in gone, no hint", sys: up,
+			containers: []hub.Container{three[0], ctr("redis", 0, 1, func(c *hub.Container) { c.Updated = now.Add(-5 * time.Minute).UnixMilli() })},
+			opts:       DetailOptions{Filter: "redis"},
+			want:       `{"hints":null,"section":{"counts":{"total":1,"shown":0,"truncated":false},"unhealthy":0,"gone":["redis"]}}`,
+		},
+		{
+			name: "gone: stale rows and names from the last hour; other systems and running names ignored", sys: up,
+			containers: []hub.Container{
+				three[0],
+				ctr("stale", 9, 1, func(c *hub.Container) { c.Updated = now.Add(-3*time.Minute - time.Second).UnixMilli(); c.Health = 3 }),
+				ctr("stale", 9, 1, func(c *hub.Container) { c.Updated = now.Add(-8 * time.Minute).UnixMilli() }),
+				ctr("edge", 1, 1, func(c *hub.Container) { c.Updated = now.Add(-3 * time.Minute).UnixMilli() }),
+				ctr("elsewhere", 1, 1, func(c *hub.Container) { c.System = "otherotherother"; c.Updated = 0 }),
+				ctr("backup", 1, 1, func(c *hub.Container) { c.System = "otherotherother" }), // live elsewhere, gone here
+			},
+			recent: []hub.ContainerStats{
+				{System: up.ID, Stats: []hub.ContainerStat{{Name: "a"}, {Name: "cron"}, {Name: "backup"}}},
+				{System: up.ID, Stats: []hub.ContainerStat{{Name: "cron"}}},
+				{System: "otherotherother", Stats: []hub.ContainerStat{{Name: "ghost"}}},
+			},
+			want: `{"hints":null,"section":{"counts":{"total":2,"shown":2,"truncated":false},"unhealthy":0,"rows":[` +
+				`{"name":"edge","image":"edge:1","status":"Up 2 hours","health":"healthy","cpu_pct":1,"mem_bytes":1048576,"net_bytes_per_s":1500,"age_s":180},` +
+				row("a", 0.5, 104857600, false) + `],"gone":["backup","cron","stale"]}}`,
+		},
+		{
+			name: "recreated: the old row of a live name is not gone", sys: up,
+			containers: []hub.Container{
+				ctr("a", 0.5, 100, func(c *hub.Container) { c.Updated = now.Add(-9 * time.Minute).UnixMilli() }),
+				three[0],
+			},
+			want: `{"hints":null,"section":{"counts":{"total":1,"shown":1,"truncated":false},"unhealthy":0,"rows":[` + row("a", 0.5, 104857600, false) + `]}}`,
+		},
+		{
+			name: "health names, unknown health value", sys: up,
+			containers: []hub.Container{
+				ctr("n", 3, 1, func(c *hub.Container) { c.Health = 0 }), ctr("s", 2, 1, func(c *hub.Container) { c.Health = 1 }),
+				ctr("x", 1, 1, func(c *hub.Container) { c.Health = 7 }),
+			},
+			want: `{"hints":null,"section":{"counts":{"total":3,"shown":3,"truncated":false},"unhealthy":0,"rows":[` +
+				`{"name":"n","image":"n:1","status":"Up 2 hours","health":"none","cpu_pct":3,"mem_bytes":1048576,"net_bytes_per_s":1500,"age_s":20},` +
+				`{"name":"s","image":"s:1","status":"Up 2 hours","health":"starting","cpu_pct":2,"mem_bytes":1048576,"net_bytes_per_s":1500,"age_s":20},` +
+				`{"name":"x","image":"x:1","status":"Up 2 hours","health":"unknown","cpu_pct":1,"mem_bytes":1048576,"net_bytes_per_s":1500,"age_s":20}]}}`,
+		},
+		{
+			name: "none running", sys: up, containers: []hub.Container{ctr("elsewhere", 1, 1, func(c *hub.Container) { c.System = "otherotherother" })},
+			want: `{"hints":null,"section":{"counts":{"total":0,"shown":0,"truncated":false},"unhealthy":0,"absent":["containers: none running; Beszel lists only running containers"]}}`,
+		},
+		{name: "down system", sys: down(), containers: three, want: `{"hints":null,"section":{"unavailable":"system is down, last seen 19m ago"}}`},
+		{name: "read failed", sys: up, readErr: errors.New("HTTP 503"), want: `{"hints":null,"section":{"unavailable":"could not read containers: HTTP 503"}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := DetailInput{
+				FleetInput: FleetInput{Now: now, Containers: tt.containers, RecentContainers: tt.recent},
+				System:     tt.sys, ContainersErr: tt.readErr,
+			}
+			tt.opts.Sections = []string{SectionContainers}
+			r, err := Detail(in, tt.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := listResult(t, r, r.Containers); got != tt.want {
+				t.Fatalf("got  %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDetailServices(t *testing.T) {
+	up := upSystem()
+	svc := func(name string, state, sub int, cpu float64, mem uint64) hub.Service {
+		return hub.Service{System: up.ID, Name: name, State: state, Sub: sub, CPU: cpu, Memory: mem, MemPeak: 2 * mem}
+	}
+	units := []hub.Service{
+		svc("sshd", 0, 1, 0.05, 300), svc("nginx", 0, 1, 1.5, 100), svc("backup", 2, 3, 0, 0),
+		svc("cron", 1, 0, 0, 200), svc("other", 2, 3, 9, 9),
+	}
+	units[4].System = "otherotherother"
+	tests := []struct {
+		name     string
+		services []hub.Service
+		sys      hub.System
+		readErr  error
+		opts     DetailOptions
+		want     string
+	}{
+		{
+			name: "failed first, then cpu; state and sub names", sys: up, services: units,
+			want: `{"hints":null,"section":{"counts":{"total":4,"shown":4,"truncated":false},"failed":1,"rows":[` +
+				`{"name":"backup","state":"failed","sub":"failed","cpu_pct":0,"mem_bytes":0,"mem_peak_bytes":0,"problems":["service_failed"]},` +
+				`{"name":"nginx","state":"active","sub":"running","cpu_pct":1.5,"mem_bytes":100,"mem_peak_bytes":200},` +
+				`{"name":"sshd","state":"active","sub":"running","cpu_pct":0.05,"mem_bytes":300,"mem_peak_bytes":600},` +
+				`{"name":"cron","state":"inactive","sub":"dead","cpu_pct":0,"mem_bytes":200,"mem_peak_bytes":400}]}}`,
+		},
+		{
+			name: "sort mem with a limit", sys: up, services: units, opts: DetailOptions{Sort: SortMem, Limit: 2},
+			want: `{"hints":["services: 2 of 4 rows not shown; raise limit (max 200) or use filter"],"section":{"counts":{"total":4,"shown":2,"truncated":true},"failed":1,"rows":[` +
+				`{"name":"backup","state":"failed","sub":"failed","cpu_pct":0,"mem_bytes":0,"mem_peak_bytes":0,"problems":["service_failed"]},` +
+				`{"name":"sshd","state":"active","sub":"running","cpu_pct":0.05,"mem_bytes":300,"mem_peak_bytes":600}]}}`,
+		},
+		{
+			name: "problems only", sys: up, services: units, opts: DetailOptions{ProblemsOnly: true},
+			want: `{"hints":null,"section":{"counts":{"total":4,"shown":1,"truncated":false},"failed":1,"rows":[` +
+				`{"name":"backup","state":"failed","sub":"failed","cpu_pct":0,"mem_bytes":0,"mem_peak_bytes":0,"problems":["service_failed"]}]}}`,
+		},
+		{
+			name: "filter", sys: up, services: units, opts: DetailOptions{Filter: "SSH"},
+			want: `{"hints":null,"section":{"counts":{"total":4,"shown":1,"truncated":false},"failed":1,"rows":[` +
+				`{"name":"sshd","state":"active","sub":"running","cpu_pct":0.05,"mem_bytes":300,"mem_peak_bytes":600}]}}`,
+		},
+		{
+			name: "filter matches nothing", sys: up, services: units, opts: DetailOptions{Filter: "docker"},
+			want: `{"hints":["services: no unit name contains \"docker\""],"section":{"counts":{"total":4,"shown":0,"truncated":false},"failed":1}}`,
+		},
+		{
+			name: "states and subs past the known ones", sys: up,
+			services: []hub.Service{svc("a", 3, 4, 0, 0), svc("b", 5, 2, 0, 0), svc("c", 6, 5, 0, 0), svc("d", 4, 1, 0, 0)},
+			opts:     DetailOptions{Sort: SortName},
+			want: `{"hints":null,"section":{"counts":{"total":4,"shown":4,"truncated":false},"failed":0,"rows":[` +
+				`{"name":"a","state":"activating","sub":"unknown","cpu_pct":0,"mem_bytes":0,"mem_peak_bytes":0},` +
+				`{"name":"b","state":"reloading","sub":"exited","cpu_pct":0,"mem_bytes":0,"mem_peak_bytes":0},` +
+				`{"name":"c","state":"unknown","sub":"unknown","cpu_pct":0,"mem_bytes":0,"mem_peak_bytes":0},` +
+				`{"name":"d","state":"deactivating","sub":"running","cpu_pct":0,"mem_bytes":0,"mem_peak_bytes":0}]}}`,
+		},
+		{
+			name: "none on this host", sys: up, services: units[4:],
+			want: `{"hints":null,"section":{"absent":["services: none reported; Beszel reads systemd units on Linux only"]}}`,
+		},
+		{name: "down system", sys: down(), services: units, want: `{"hints":null,"section":{"unavailable":"system is down, last seen 19m ago"}}`},
+		{name: "read failed", sys: up, readErr: errors.New("HTTP 503"), want: `{"hints":null,"section":{"unavailable":"could not read services: HTTP 503"}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := DetailInput{FleetInput: FleetInput{Now: now, Services: tt.services}, System: tt.sys, ServicesErr: tt.readErr}
+			tt.opts.Sections = []string{SectionServices}
+			r, err := Detail(in, tt.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := listResult(t, r, r.Services); got != tt.want {
+				t.Fatalf("got  %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDetailHints: each list section adds its own hint, in section order.
+func TestDetailHints(t *testing.T) {
+	up := upSystem()
+	in := DetailInput{
+		FleetInput: FleetInput{Now: now, Services: []hub.Service{{System: up.ID, Name: "a"}, {System: up.ID, Name: "b"}}},
+		System:     up,
+	}
+	for range 2 {
+		in.Containers = append(in.Containers, hub.Container{System: up.ID, Name: "c", Updated: now.UnixMilli()})
+	}
+	r, err := Detail(in, DetailOptions{Sections: []string{SectionServices, SectionContainers}, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `["services: 1 of 2 rows not shown; raise limit (max 200) or use filter","containers: 1 of 2 rows not shown; raise limit (max 200) or use filter"]`
+	if got := asJSON(t, r.Hints); got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
