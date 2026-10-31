@@ -43,8 +43,8 @@ func run(ctx context.Context, environ []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	token, err := keychain.Read(ctx, "beszelscope", hostOf(env["BESZELSCOPE_URL"]))
-	if err != nil {
+	token, err := keychain.New(keychain.Security).Get(ctx, hostOf(env["BESZELSCOPE_URL"]))
+	if err != nil && !errors.Is(err, keychain.ErrNotFound) {
 		return fmt.Errorf("keychain: %w", err)
 	}
 	cfg, err := config.Parse(env, token)
