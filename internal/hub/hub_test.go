@@ -208,6 +208,16 @@ func TestRequestShape(t *testing.T) {
 			wantSort:   "created", wantFields: "system,type,created,stats",
 		},
 		{
+			name: "zfs pools ask for their update time",
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.ZfsPools(ctx)
+				return err
+			},
+			wantPath:   "/api/collections/zfs_pools/records",
+			wantSort:   "system,name",
+			wantFields: "system,name,display_name,health,status,size,alloc,free,scrub,vdevs,raw,updated",
+		},
+		{
 			name: "monitor stats filter on unix ms",
 			call: func(ctx context.Context, c *Client) error {
 				_, err := c.MonitorStats(ctx, bravoID, Stat1m, since)

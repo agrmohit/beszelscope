@@ -73,10 +73,105 @@
       "total_bytes": 8338268160,
       "used_bytes": 2007920640
     },
-    "not_collected": [
-      "battery",
-      "fans",
-      "temperatures"
+    "absent": [
+      "battery: not reported by this host",
+      "fans: not reported by this host",
+      "temperatures: not reported by this host"
+    ]
+  },
+  "network": {
+    "sampled_ago_s": 31,
+    "sent_bytes_per_s": 56835,
+    "recv_bytes_per_s": 96118,
+    "interfaces": [
+      {
+        "name": "eth0",
+        "sent_bytes_per_s": 56663,
+        "recv_bytes_per_s": 95955,
+        "total_sent_bytes": 47364376400,
+        "total_recv_bytes": 85235006299
+      },
+      {
+        "name": "tailscale0",
+        "sent_bytes_per_s": 172,
+        "recv_bytes_per_s": 163,
+        "total_sent_bytes": 7397302,
+        "total_recv_bytes": 3323067
+      }
+    ],
+    "monitors": [
+      {
+        "target": "https://example.com/",
+        "protocol": "http",
+        "enabled": true,
+        "interval_s": 600,
+        "latency_ms": 199.1,
+        "latency_avg_1h_ms": 149.6,
+        "latency_max_1h_ms": 228.7,
+        "loss_1h_pct": 0,
+        "cert": {
+          "days_left": 60,
+          "issuer": "WE1"
+        },
+        "checked_ago_s": 31
+      }
+    ],
+    "absent": [
+      "wifi: no WiFi interface"
+    ]
+  },
+  "disk": {
+    "sampled_ago_s": 31,
+    "filesystems": [
+      {
+        "name": "/",
+        "total_gib": 74.96,
+        "used_gib": 28.84,
+        "pct": 40.1,
+        "read_bytes_per_s": 0,
+        "write_bytes_per_s": 314572,
+        "io_util_pct": 0.4
+      }
+    ],
+    "pools": [
+      {
+        "name": "Backup",
+        "health": "DEGRADED",
+        "status": "One or more devices has been removed.",
+        "size_bytes": 2000398934016,
+        "alloc_bytes": 1500000000000,
+        "free_bytes": 500398934016,
+        "scrub": {
+          "state": "NONE",
+          "errors": 0
+        },
+        "bad_vdevs": [
+          {
+            "name": "raidz1-0",
+            "state": "DEGRADED",
+            "read_errors": 3,
+            "write_errors": 0,
+            "checksum_errors": 1
+          }
+        ],
+        "problems": [
+          "pool_degraded"
+        ]
+      },
+      {
+        "name": "tank",
+        "health": "ONLINE",
+        "size_bytes": 4000787030016,
+        "alloc_bytes": 1200000000000,
+        "free_bytes": 2800787030016,
+        "scrub": {
+          "state": "FINISHED",
+          "errors": 0
+        }
+      }
+    ],
+    "absent": [
+      "smart: no SMART data reported"
     ]
   }
 }

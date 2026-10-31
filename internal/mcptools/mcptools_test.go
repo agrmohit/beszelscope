@@ -59,10 +59,18 @@ type fakeHub struct {
 	calls []string // methods called, in any order
 }
 
-func (f *fakeHub) called(method string) bool {
+func (f *fakeHub) called(method string) bool { return f.count(method) > 0 }
+
+func (f *fakeHub) count(method string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Contains(f.calls, method)
+	n := 0
+	for _, c := range f.calls {
+		if c == method {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeHub) check(method string) error {
@@ -596,8 +604,8 @@ func TestListing(t *testing.T) {
 			`"items":{"type":"string"},"maxItems":20,"type":"array"`, "unique prefix works",
 		}},
 		{name: "system_detail definition", got: tool("system_detail"), want: []string{
-			`"readOnlyHint":true`, `"openWorldHint":false`, `"required":["system"]`, `"enum":["summary","core"]`,
-			`"maxItems":2,"type":"array"`, `"uniqueItems":true`, `"additionalProperties":false`, "one server",
+			`"readOnlyHint":true`, `"openWorldHint":false`, `"required":["system"]`, `"enum":["summary","core","network","disk"]`,
+			`"maxItems":4,"type":"array"`, `"uniqueItems":true`, `"additionalProperties":false`, "one server",
 			"without sections you get summary", "every temperature and fan sensor", "PMU tdie sensors are the CPU dies", "unique prefix works",
 		}},
 	}

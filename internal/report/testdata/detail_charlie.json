@@ -99,8 +99,107 @@
       "pct": 100,
       "state": "full"
     },
-    "not_collected": [
-      "fans"
+    "absent": [
+      "fans: not reported by this host"
+    ]
+  },
+  "network": {
+    "sampled_ago_s": 30,
+    "sent_bytes_per_s": 44167,
+    "recv_bytes_per_s": 37095,
+    "interfaces": [
+      {
+        "name": "bridge100",
+        "sent_bytes_per_s": 152,
+        "recv_bytes_per_s": 0,
+        "total_sent_bytes": 24947022,
+        "total_recv_bytes": 6722655
+      },
+      {
+        "name": "en0",
+        "sent_bytes_per_s": 43559,
+        "recv_bytes_per_s": 37095,
+        "total_sent_bytes": 5154648110,
+        "total_recv_bytes": 22628414400
+      },
+      {
+        "name": "vmenet0",
+        "sent_bytes_per_s": 76,
+        "recv_bytes_per_s": 0,
+        "total_sent_bytes": 12466789,
+        "total_recv_bytes": 6803430
+      },
+      {
+        "name": "vmenet1",
+        "sent_bytes_per_s": 76,
+        "recv_bytes_per_s": 0,
+        "total_sent_bytes": 7499774,
+        "total_recv_bytes": 464
+      },
+      {
+        "name": "vmenet2",
+        "sent_bytes_per_s": 76,
+        "recv_bytes_per_s": 0,
+        "total_sent_bytes": 9368045,
+        "total_recv_bytes": 980
+      },
+      {
+        "name": "vmenet3",
+        "sent_bytes_per_s": 76,
+        "recv_bytes_per_s": 0,
+        "total_sent_bytes": 9367155,
+        "total_recv_bytes": 980
+      },
+      {
+        "name": "vmenet4",
+        "sent_bytes_per_s": 76,
+        "recv_bytes_per_s": 0,
+        "total_sent_bytes": 9360491,
+        "total_recv_bytes": 810
+      },
+      {
+        "name": "vmenet5",
+        "sent_bytes_per_s": 76,
+        "recv_bytes_per_s": 0,
+        "total_sent_bytes": 9428519,
+        "total_recv_bytes": 600
+      }
+    ],
+    "wifi_rssi_dbm": {
+      "en0": -30
+    },
+    "absent": [
+      "monitors: none configured for this server"
+    ]
+  },
+  "disk": {
+    "sampled_ago_s": 30,
+    "filesystems": [
+      {
+        "name": "/",
+        "total_gib": 460.43,
+        "used_gib": 298.39,
+        "pct": 64.8,
+        "read_bytes_per_s": 11700001,
+        "write_bytes_per_s": 3042473,
+        "io_util_pct": 8.5
+      }
+    ],
+    "smart": [
+      {
+        "name": "NS_01@1",
+        "model": "APPLE SSD AP0512Z",
+        "type": "nvme",
+        "state": "PASSED",
+        "capacity_bytes": 500277792768,
+        "temp_c": 32,
+        "power_on_hours": 1633,
+        "power_cycles": 178,
+        "checked_ago_s": 809
+      }
+    ],
+    "absent": [
+      "pools: no ZFS or btrfs pools"
     ]
   }
 }

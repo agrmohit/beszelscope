@@ -42,7 +42,7 @@ func TestDetailGolden(t *testing.T) {
 		}
 		return in
 	}
-	both := []string{SectionSummary, SectionCore}
+	both := []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk}
 	tests := []struct {
 		name   string
 		system string
@@ -120,7 +120,7 @@ func TestDetailEnvelope(t *testing.T) {
 		},
 		{
 			name: "core only", sys: up, sections: []string{SectionCore},
-			want: `{"system":{"name":"web","status":"up","age_s":30},"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"not_collected":["battery","fans","memory (agent older than 0.21.1)","temperatures"]}}`,
+			want: `{"system":{"name":"web","status":"up","age_s":30},"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"absent":["battery: not reported by this host","fans: not reported by this host","memory: agent older than 0.21.1 reports no byte counts","temperatures: not reported by this host"]}}`,
 		},
 		{
 			name: "down: last seen, not age", sys: down, sections: []string{SectionCore},
@@ -128,13 +128,13 @@ func TestDetailEnvelope(t *testing.T) {
 		},
 		{
 			name: "token expiring and agent skew warn", sys: up, hub: "0.22.0", expires: now.Add(5 * 24 * time.Hour), sections: []string{SectionCore},
-			want: `{"system":{"name":"web","status":"up","age_s":30},"warnings":["hub token expires in 5d; renew it (see README)","web runs agent 0.21.1; hub is 0.22.0"],"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"not_collected":["battery","fans","memory (agent older than 0.21.1)","temperatures"]}}`,
+			want: `{"system":{"name":"web","status":"up","age_s":30},"warnings":["hub token expires in 5d; renew it (see README)","web runs agent 0.21.1; hub is 0.22.0"],"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"absent":["battery: not reported by this host","fans: not reported by this host","memory: agent older than 0.21.1 reports no byte counts","temperatures: not reported by this host"]}}`,
 		},
 		{
 			name: "matching hub version does not warn", sys: up, hub: "0.21.1", sections: []string{SectionCore},
-			want: `{"system":{"name":"web","status":"up","age_s":30},"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"not_collected":["battery","fans","memory (agent older than 0.21.1)","temperatures"]}}`,
+			want: `{"system":{"name":"web","status":"up","age_s":30},"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"absent":["battery: not reported by this host","fans: not reported by this host","memory: agent older than 0.21.1 reports no byte counts","temperatures: not reported by this host"]}}`,
 		},
-		{name: "unknown section", sys: up, sections: []string{"alerts"}, wantErr: `unknown section "alerts"; want one of summary, core`},
+		{name: "unknown section", sys: up, sections: []string{"alerts"}, wantErr: `unknown section "alerts"; want one of summary, core, network, disk`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -259,12 +259,12 @@ func TestDetailCore(t *testing.T) {
 		{
 			name: "no sensors or battery: named as not collected", sys: up,
 			latest: sample(func(x *hub.Stats) { x.Temps, x.Fans, x.Battery = nil, nil, [2]uint8{} }),
-			want:   `{"sampled_ago_s":30,"cpu_pct":21.4,"cpu_breakdown_pct":{"idle":78.6,"iowait":0,"irq":0,"nice":0,"softirq":0,"steal":0,"system":8.1,"user":13.31},"cpu_cores_pct":[50,8],"load_avg":[3.41,3.56,3.59],"mem":{"total_bytes":100,"used_bytes":60,"cache_bytes":30,"pct":78.2},"swap":{"total_bytes":8,"used_bytes":2},"not_collected":["battery","fans","temperatures"]}`,
+			want:   `{"sampled_ago_s":30,"cpu_pct":21.4,"cpu_breakdown_pct":{"idle":78.6,"iowait":0,"irq":0,"nice":0,"softirq":0,"steal":0,"system":8.1,"user":13.31},"cpu_cores_pct":[50,8],"load_avg":[3.41,3.56,3.59],"mem":{"total_bytes":100,"used_bytes":60,"cache_bytes":30,"pct":78.2},"swap":{"total_bytes":8,"used_bytes":2},"absent":["battery: not reported by this host","fans: not reported by this host","temperatures: not reported by this host"]}`,
 		},
 		{
 			name: "old agent: no byte memory, short breakdown", sys: up,
 			latest: sample(func(x *hub.Stats) { x.Mem, x.CPUBreakdown = [4]uint64{}, []float64{1, 2} }),
-			want:   `{"sampled_ago_s":30,"cpu_pct":21.4,"cpu_cores_pct":[50,8],"load_avg":[3.41,3.56,3.59],"swap":{"total_bytes":8,"used_bytes":2},"temps_c":{"CPU":61.3,"NAND":33},"fans_rpm":{"fan0":1200},"battery":{"pct":100,"state":"full"},"not_collected":["memory (agent older than 0.21.1)"]}`,
+			want:   `{"sampled_ago_s":30,"cpu_pct":21.4,"cpu_cores_pct":[50,8],"load_avg":[3.41,3.56,3.59],"swap":{"total_bytes":8,"used_bytes":2},"temps_c":{"CPU":61.3,"NAND":33},"fans_rpm":{"fan0":1200},"battery":{"pct":100,"state":"full"},"absent":["memory: agent older than 0.21.1 reports no byte counts"]}`,
 		},
 		{
 			name: "ZFS ARC shown when present", sys: up, latest: sample(func(x *hub.Stats) { x.Mem[3] = 7 }),

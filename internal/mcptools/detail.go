@@ -22,6 +22,10 @@ const detailDescription = "Current detail for one server monitored by the Beszel
 	"and this server's problems. " +
 	"core has CPU use in total, by state (user, system, iowait, steal, ...) and per core, " +
 	"load average, memory, swap, every temperature and fan sensor (on a Mac, the PMU tdie sensors are the CPU dies), and battery. " +
+	"network has traffic per interface in bytes per second and in total, WiFi signal, and network monitors: " +
+	"probes from this server to a target, with latency, packet loss in the last hour and certificate days left. " +
+	"disk has each filesystem's size in GiB, use and I/O, ZFS and btrfs pools, and SMART health per drive; " +
+	"for a down server it still shows the last SMART and pool results. " +
 	"Values are the latest 60 s poll and include no history."
 
 type detailIn struct {
@@ -73,11 +77,20 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	want := func(section string) bool {
 		return len(in.Sections) == 0 && section == report.SectionSummary || slices.Contains(in.Sections, section)
 	}
+	// Each source is read once, and only for the sections that use it.
 	var fe fetcher
 	if want(report.SectionSummary) {
 		t.fetchSummary(ctx, &fe, &input)
 	}
-	if want(report.SectionCore) && sys.Status == "up" {
+	const lacks = "its rows and related problems may be missing"
+	if want(report.SectionSummary) || want(report.SectionNetwork) {
+		fe.run("network monitors", lacks, func() (err error) { input.Monitors, err = t.d.Hub.Monitors(ctx); return err })
+	}
+	if want(report.SectionSummary) || want(report.SectionDisk) {
+		fe.run("SMART devices", lacks, func() (err error) { input.Smart, err = t.d.Hub.SmartDevices(ctx); return err })
+		fe.run("storage pools", lacks, func() (err error) { input.Pools, err = t.d.Hub.ZfsPools(ctx); return err })
+	}
+	if (want(report.SectionCore) || want(report.SectionNetwork) || want(report.SectionDisk)) && sys.Status == "up" {
 		fe.run("stats", "the stats sections are missing", func() error {
 			rows, err := t.d.Hub.SystemStats(ctx, sys.ID, hub.Stat1m, now.Add(-latestWithin))
 			if err != nil {
@@ -102,8 +115,9 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	return nil, res, nil
 }
 
-// fetchSummary starts the reads the summary needs: the static facts and the
-// same problem sources as fleet_status, for this system only.
+// fetchSummary starts the reads only the summary needs: the static facts and
+// the service and container problem sources. Monitors, SMART and pools are
+// read by the caller, since network and disk use them too.
 func (t *tools) fetchSummary(ctx context.Context, fe *fetcher, in *report.DetailInput) {
 	sys := in.System
 	fe.run("system details", "the summary lacks OS and CPU facts", func() error {
@@ -118,9 +132,6 @@ func (t *tools) fetchSummary(ctx context.Context, fe *fetcher, in *report.Detail
 	const lacks = "related problems may be missing"
 	fe.run("systemd services", lacks, func() (err error) { in.Services, err = t.d.Hub.Services(ctx); return err })
 	fe.run("containers", lacks, func() (err error) { in.Containers, err = t.d.Hub.Containers(ctx); return err })
-	fe.run("SMART devices", lacks, func() (err error) { in.Smart, err = t.d.Hub.SmartDevices(ctx); return err })
-	fe.run("storage pools", lacks, func() (err error) { in.Pools, err = t.d.Hub.ZfsPools(ctx); return err })
-	fe.run("network monitors", lacks, func() (err error) { in.Monitors, err = t.d.Hub.Monitors(ctx); return err })
 	if sys.Status == "up" {
 		fe.run("container history", lacks, func() (err error) {
 			in.RecentContainers, err = t.d.Hub.ContainerStats(ctx, sys.ID, hub.Stat10m, in.Now.Add(-time.Hour))

@@ -298,35 +298,32 @@ func structural(in FleetInput, s hub.System) []Problem {
 		if d.System != s.ID {
 			continue
 		}
-		switch d.State {
-		case "FAILED":
+		switch smartProblem(d) {
+		case CodeSmartFailed:
 			smartFailed = append(smartFailed, deviceName(d))
-		case "WARNING":
+		case CodeSmartWarning:
 			smartWarn = append(smartWarn, deviceName(d))
 		}
 	}
 
 	for _, pl := range in.Pools {
-		if pl.System == s.ID && pl.Health != "" && pl.Health != "ONLINE" {
+		if pl.System == s.ID && poolProblem(pl) != "" {
 			pools = append(pools, pl.Name+" "+pl.Health)
 		}
 	}
 
 	for _, m := range in.Monitors {
-		if m.System != s.ID || !m.Enabled {
+		if m.System != s.ID {
 			continue
 		}
-		if m.Loss1h > 0 {
+		if monitorFailing(m) {
 			monitors = append(monitors, fmt.Sprintf("%s %.0f%% loss", m.Target, m.Loss1h))
 		}
-		if m.CertInfo != nil && m.CertInfo.Expires > 0 {
-			left := time.UnixMilli(m.CertInfo.Expires).Sub(in.Now)
-			switch {
-			case left <= 0:
-				expired = append(expired, m.Target+" "+short(-left)+" ago")
-			case left < certWarnBefore:
-				expiring = append(expiring, m.Target+" in "+short(left))
-			}
+		switch code, left := certProblem(m, in.Now); code {
+		case CodeCertExpired:
+			expired = append(expired, m.Target+" "+short(-left)+" ago")
+		case CodeCertExpiring:
+			expiring = append(expiring, m.Target+" in "+short(left))
 		}
 	}
 
@@ -349,6 +346,49 @@ func structural(in FleetInput, s hub.System) []Problem {
 		p = append(p, problem(CodeSecurityUpdates, strconv.Itoa(int(pu[1]))+" security updates pending", int(pu[1])))
 	}
 	return p
+}
+
+// smartProblem is the problem code for a drive's SMART state, or "".
+func smartProblem(d hub.SmartDevice) string {
+	switch d.State {
+	case "FAILED":
+		return CodeSmartFailed
+	case "WARNING":
+		return CodeSmartWarning
+	default:
+		return ""
+	}
+}
+
+// poolProblem is the problem code for a pool's health, or "". An unknown
+// health is not a problem.
+func poolProblem(p hub.ZfsPool) string {
+	if p.Health != "" && p.Health != "ONLINE" {
+		return CodePoolDegraded
+	}
+	return ""
+}
+
+// monitorFailing reports any packet loss in the last hour on an enabled monitor.
+func monitorFailing(m hub.Monitor) bool {
+	return m.Enabled && m.Loss1h > 0
+}
+
+// certProblem is the certificate problem of an enabled monitor, or "", with
+// the time left (negative once expired). Missing cert info is unknown, not fine.
+func certProblem(m hub.Monitor, now time.Time) (string, time.Duration) {
+	if !m.Enabled || m.CertInfo == nil || m.CertInfo.Expires <= 0 {
+		return "", 0
+	}
+	left := time.UnixMilli(m.CertInfo.Expires).Sub(now)
+	switch {
+	case left <= 0:
+		return CodeCertExpired, left
+	case left < certWarnBefore:
+		return CodeCertExpiring, left
+	default:
+		return "", left
+	}
 }
 
 // deviceName prefers the model; macOS device names are long IOService paths.

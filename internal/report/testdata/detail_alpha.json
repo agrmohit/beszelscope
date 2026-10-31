@@ -23,5 +23,27 @@
   },
   "core": {
     "unavailable": "system is down, last seen 1h ago"
+  },
+  "network": {
+    "unavailable": "system is down, last seen 1h ago"
+  },
+  "disk": {
+    "unavailable": "system is down, last seen 1h ago",
+    "smart": [
+      {
+        "name": "NS_01@1",
+        "model": "APPLE SSD AP0256Z",
+        "type": "nvme",
+        "state": "PASSED",
+        "capacity_bytes": 251000193024,
+        "temp_c": 27,
+        "power_on_hours": 947,
+        "power_cycles": 261,
+        "checked_ago_s": 11359
+      }
+    ],
+    "absent": [
+      "pools: no ZFS or btrfs pools"
+    ]
   }
 }

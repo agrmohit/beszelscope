@@ -279,6 +279,7 @@ type ZfsPool struct {
 	Scrub       *Scrub `json:"scrub"`
 	Vdevs       []Vdev `json:"vdevs"`
 	Raw         bool   `json:"raw"` // sizes are physical, not usable
+	Updated     Time   `json:"updated"`
 }
 
 // Scrub is a pool's last scrub.
@@ -384,7 +385,7 @@ func (c *Client) SmartDevices(ctx context.Context) ([]SmartDevice, error) {
 // ZfsPools returns every storage pool.
 func (c *Client) ZfsPools(ctx context.Context) ([]ZfsPool, error) {
 	return list[ZfsPool](ctx, c, "zfs_pools",
-		"system,name,display_name,health,status,size,alloc,free,scrub,vdevs,raw", "", "system,name")
+		"system,name,display_name,health,status,size,alloc,free,scrub,vdevs,raw,updated", "", "system,name")
 }
 
 // Monitors returns every network monitor.

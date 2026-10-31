@@ -13,10 +13,12 @@ import (
 const (
 	SectionSummary = "summary"
 	SectionCore    = "core"
+	SectionNetwork = "network"
+	SectionDisk    = "disk"
 )
 
 // Sections lists every section system_detail accepts.
-var Sections = []string{SectionSummary, SectionCore}
+var Sections = []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk}
 
 // DetailInput is everything system_detail reads for one system, already
 // fetched. FleetInput carries the problem sources the summary needs.
@@ -41,6 +43,8 @@ type DetailResult struct {
 	Warnings []string  `json:"warnings,omitempty"`
 	Summary  *Summary  `json:"summary,omitempty"`
 	Core     *Core     `json:"core,omitempty"`
+	Network  *Network  `json:"network,omitempty"`
+	Disk     *Disk     `json:"disk,omitempty"`
 }
 
 // SystemRef names the system and how fresh its data is.
@@ -104,7 +108,7 @@ type Core struct {
 	TempsC          map[string]float64 `json:"temps_c,omitempty"`
 	FansRPM         map[string]uint16  `json:"fans_rpm,omitempty"`
 	Battery         *Battery           `json:"battery,omitempty"`
-	NotCollected    []string           `json:"not_collected,omitempty"` // parts the agent does not report
+	Absent          []string           `json:"absent,omitempty"` // "part: why it is missing"
 }
 
 // Memory is RAM use in bytes.
@@ -145,6 +149,10 @@ func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
 			out.Summary = summary(in, row)
 		case SectionCore:
 			out.Core = core(in)
+		case SectionNetwork:
+			out.Network = network(in)
+		case SectionDisk:
+			out.Disk = disk(in)
 		default:
 			return DetailResult{}, fmt.Errorf("unknown section %q; want one of %s", sec, strings.Join(Sections, ", "))
 		}
@@ -183,11 +191,8 @@ func core(in DetailInput) *Core {
 	if u := unavailable(in.System, in.Now); u != "" {
 		return &Core{Unavailable: u}
 	}
-	if in.StatsErr != nil {
-		return &Core{Unavailable: "could not read stats: " + in.StatsErr.Error()}
-	}
-	if in.Latest == nil {
-		return &Core{Unavailable: "the hub has no stats sample from the last 5 minutes"}
+	if u := statsUnavailable(in); u != "" {
+		return &Core{Unavailable: u}
 	}
 	x := in.Latest.Stats
 	c := &Core{
@@ -212,7 +217,7 @@ func core(in DetailInput) *Core {
 			Pct: round(x.MemPct, 1),
 		}
 	} else {
-		c.NotCollected = append(c.NotCollected, "memory (agent older than 0.21.1)")
+		c.Absent = append(c.Absent, "memory: agent older than 0.21.1 reports no byte counts")
 	}
 
 	for name, v := range x.Temps {
@@ -226,15 +231,27 @@ func core(in DetailInput) *Core {
 	c.FansRPM = x.Fans
 	for part, present := range map[string]bool{"temperatures": len(x.Temps) > 0, "fans": len(x.Fans) > 0, "battery": c.Battery != nil} {
 		if !present {
-			c.NotCollected = append(c.NotCollected, part)
+			c.Absent = append(c.Absent, part+": not reported by this host")
 		}
 	}
-	slices.Sort(c.NotCollected)
+	slices.Sort(c.Absent)
 	return c
 }
 
 // cpuParts names Beszel's CPU breakdown, in its order.
 var cpuParts = []string{"user", "system", "iowait", "steal", "idle", "irq", "softirq", "nice"}
+
+// statsUnavailable explains why there is no stats sample, or is "".
+func statsUnavailable(in DetailInput) string {
+	switch {
+	case in.StatsErr != nil:
+		return "could not read stats: " + in.StatsErr.Error()
+	case in.Latest == nil:
+		return "the hub has no stats sample from the last 5 minutes"
+	default:
+		return ""
+	}
+}
 
 // unavailable explains why live data is missing, or is "" for an up system.
 func unavailable(s hub.System, now time.Time) string {

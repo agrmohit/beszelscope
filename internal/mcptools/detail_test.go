@@ -15,7 +15,7 @@ import (
 // TestSystemDetailMatchesReport: over MCP, the structured result is exactly
 // the report package's golden output for the same fixtures.
 func TestSystemDetailMatchesReport(t *testing.T) {
-	both := []any{"summary", "core"}
+	both := []any{"summary", "core", "network", "disk"}
 	tests := []struct {
 		name   string
 		args   map[string]any
@@ -106,6 +106,7 @@ func TestSystemDetailReads(t *testing.T) {
 		want   []string
 		absent []string
 		unread []string // hub methods that must not be called
+		once   []string // hub methods that must be called exactly once
 	}{
 		{
 			name: "newest stats sample wins, wherever it sits", setup: older, args: map[string]any{"system": "bravo", "sections": []any{"core"}},
@@ -146,6 +147,32 @@ func TestSystemDetailReads(t *testing.T) {
 			unread: []string{"SystemDetails", "Services", "Containers", "SmartDevices", "ZfsPools", "Monitors", "ContainerStats"},
 		},
 		{
+			name: "network alone: monitors and stats only", args: map[string]any{"system": "bravo", "sections": []any{"network"}},
+			want:   []string{`"network"`, `"interfaces"`, `"monitors"`},
+			unread: []string{"SystemDetails", "Services", "Containers", "SmartDevices", "ZfsPools", "ContainerStats"},
+			once:   []string{"Monitors", "SystemStats"},
+		},
+		{
+			name: "disk alone: SMART, pools and stats only", args: map[string]any{"system": "bravo", "sections": []any{"disk"}},
+			want:   []string{`"filesystems"`, `"pools"`},
+			unread: []string{"SystemDetails", "Services", "Containers", "Monitors", "ContainerStats"},
+			once:   []string{"SmartDevices", "ZfsPools", "SystemStats"},
+		},
+		{
+			name: "down system disk: last SMART, no stats read", fail: "SystemStats", args: map[string]any{"system": "alpha", "sections": []any{"disk"}},
+			want: []string{`"unavailable":"system is down`, `"smart":[{`, `"NS_01@1"`}, absent: []string{"HTTP 503"},
+			unread: []string{"SystemStats"},
+		},
+		{
+			name: "every section reads each source once", args: map[string]any{"system": "bravo", "sections": []any{"summary", "core", "network", "disk"}},
+			want: []string{`"summary"`, `"core"`, `"network"`, `"disk"`},
+			once: []string{"Systems", "SystemDetails", "Services", "Containers", "SmartDevices", "ZfsPools", "Monitors", "ContainerStats", "SystemStats"},
+		},
+		{
+			name: "monitors fail: network keeps traffic and warns", fail: "Monitors", args: map[string]any{"system": "bravo", "sections": []any{"network"}},
+			want: []string{"could not read network monitors, so its rows and related problems may be missing", `"interfaces"`},
+		},
+		{
 			name: "core alone reads no problem sources", fail: "Services", args: map[string]any{"system": "bravo", "sections": []any{"core"}},
 			want: []string{`"core"`}, absent: []string{"HTTP 503"},
 		},
@@ -178,6 +205,11 @@ func TestSystemDetailReads(t *testing.T) {
 			for _, m := range tt.unread {
 				if h.called(m) {
 					t.Errorf("%s was called", m)
+				}
+			}
+			for _, m := range tt.once {
+				if n := h.count(m); n != 1 {
+					t.Errorf("%s called %d times, want once", m, n)
 				}
 			}
 		})
