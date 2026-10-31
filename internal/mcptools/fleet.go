@@ -61,6 +61,7 @@ func (t *tools) fleet(ctx context.Context, req *mcp.CallToolRequest, in fleetIn)
 
 	input := report.FleetInput{
 		Now: now, HubVersion: t.d.HubVersion, TokenExpiresAt: t.d.TokenExpiresAt, Systems: systems,
+		LastSeen: map[string]time.Time{},
 	}
 	var fe fetcher
 	const lacks = "related problems may be missing"
@@ -70,7 +71,11 @@ func (t *tools) fleet(ctx context.Context, req *mcp.CallToolRequest, in fleetIn)
 	fe.run("storage pools", lacks, func() (err error) { input.Pools, err = t.d.Hub.ZfsPools(ctx); return err })
 	fe.run("network monitors", lacks, func() (err error) { input.Monitors, err = t.d.Hub.Monitors(ctx); return err })
 	for _, s := range systems {
-		if s.Status != "up" || (len(ids) > 0 && !slices.Contains(ids, s.ID)) {
+		if len(ids) > 0 && !slices.Contains(ids, s.ID) {
+			continue
+		}
+		if s.Status != "up" {
+			t.lastSeen(ctx, &fe, s, &input)
 			continue
 		}
 		fe.run("container history of "+s.Name, lacks, func() error {
@@ -87,6 +92,18 @@ func (t *tools) fleet(ctx context.Context, req *mcp.CallToolRequest, in fleetIn)
 	}
 	res.Warnings = append(res.Warnings, warnings...)
 	return nil, res, nil
+}
+
+// lastSeen starts the read of when s last sent data. Beszel's updated time
+// moves on record rewrites, so it is only the fallback.
+func (t *tools) lastSeen(ctx context.Context, fe *fetcher, s hub.System, in *report.FleetInput) {
+	fe.run("last data of "+s.Name, "its last-seen time is when its status last changed", func() error {
+		seen, err := t.d.Hub.LastStatsAt(ctx, s.ID)
+		if err == nil {
+			fe.locked(func() { in.LastSeen[s.ID] = seen })
+		}
+		return err
+	})
 }
 
 // resolveAll turns names into system IDs. For ambiguous names it returns

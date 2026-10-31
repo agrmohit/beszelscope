@@ -38,6 +38,7 @@ type Hub interface {
 	SystemDetails(ctx context.Context) ([]hub.SystemDetails, error)
 	SystemStats(ctx context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.SystemStats, error)
 	ContainerStats(ctx context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.ContainerStats, error)
+	LastStatsAt(ctx context.Context, systemID string) (time.Time, error)
 	MonitorStats(ctx context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.MonitorStats, error)
 	PackageUpdates(ctx context.Context, systemID string) (hub.PackageUpdates, error)
 }

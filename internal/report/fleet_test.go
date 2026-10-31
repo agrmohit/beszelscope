@@ -379,7 +379,7 @@ func TestFleetWarnings(t *testing.T) {
 		{name: "exactly 30d is fine", expires: now.Add(30 * 24 * time.Hour), systems: []hub.System{sys}},
 		{
 			name: "expired", expires: now.Add(-49 * time.Hour), systems: []hub.System{sys},
-			want: []string{"hub token expired 2d ago; a human must renew it (see README)"},
+			want: []string{"hub token expired 2d 1h ago; a human must renew it (see README)"},
 		},
 		{
 			name: "agent version skew", hub: "0.21.1", systems: []hub.System{sys, old},
@@ -477,6 +477,25 @@ func load[T any](t *testing.T, name string) []T {
 	return p.Items
 }
 
+// fixtureLastSeen is the newest captured stats row of each system that is
+// not up, as the hub's LastStatsAt returns it; zero when there is none.
+func fixtureLastSeen(t *testing.T, systems []hub.System) map[string]time.Time {
+	t.Helper()
+	out := map[string]time.Time{}
+	for _, s := range systems {
+		if s.Status == "up" {
+			continue
+		}
+		out[s.ID] = time.Time{}
+		for _, r := range load[hub.SystemStats](t, "hub/system_stats_latest_"+s.Name+".json") {
+			if r.Created.After(out[s.ID]) {
+				out[s.ID] = r.Created.Time
+			}
+		}
+	}
+	return out
+}
+
 // TestFleetGolden runs the real (sanitised) fixtures through Fleet and
 // compares the exact JSON the model would get. Run with -update to rewrite.
 func TestFleetGolden(t *testing.T) {
@@ -491,6 +510,7 @@ func TestFleetGolden(t *testing.T) {
 		Pools:          load[hub.ZfsPool](t, "handmade/zfs_pools.json"),
 		Monitors:       load[hub.Monitor](t, "hub/network_monitors.json"),
 	}
+	in.LastSeen = fixtureLastSeen(t, in.Systems)
 	tests := []struct {
 		name string
 		opts FleetOptions
@@ -521,6 +541,84 @@ func TestFleetGolden(t *testing.T) {
 			}
 			if string(got) != string(want) {
 				t.Errorf("output differs from %s; rerun with -update and review the diff\ngot:\n%s", tt.file, got)
+			}
+		})
+	}
+}
+
+// TestLastSeen: a system that is not up is dated by its newest stats row,
+// because Beszel bumps systems.updated when it rewrites the record.
+func TestLastSeen(t *testing.T) {
+	sys := upSystem()
+	sys.Status, sys.Updated = "down", ago(2*time.Hour) // record rewritten 2h ago
+	paused := sys
+	paused.Status = "paused"
+	tests := []struct {
+		name     string
+		sys      hub.System
+		lastSeen map[string]time.Time
+		want     string // fleet row, then the detail core section
+	}{
+		{
+			name: "newest stats row wins over updated", sys: sys, lastSeen: map[string]time.Time{sys.ID: now.Add(-58*time.Hour - 20*time.Minute)},
+			want: `{"name":"web","status":"down","last_seen_ago_s":210000,"problems":[{"code":"status_down","detail":"down for 2d 10h","section":"summary"}]} {"unavailable":"system is down, last seen 2d 10h ago"}`,
+		},
+		{
+			name: "no stats row in 30 days", sys: sys, lastSeen: map[string]time.Time{sys.ID: {}},
+			want: `{"name":"web","status":"down","problems":[{"code":"status_down","detail":"down, no data in the last 30 days","section":"summary"}]} {"unavailable":"system is down, no data in the last 30 days"}`,
+		},
+		{
+			name: "unknown: updated stands in", sys: sys,
+			want: `{"name":"web","status":"down","last_seen_ago_s":7200,"problems":[{"code":"status_down","detail":"down for 2h","section":"summary"}]} {"unavailable":"system is down, last seen 2h ago"}`,
+		},
+		{
+			name: "paused uses the stats row too", sys: paused, lastSeen: map[string]time.Time{sys.ID: now.Add(-25 * time.Hour)},
+			want: `{"name":"web","status":"paused","last_seen_ago_s":90000,"problems":[{"code":"status_paused","detail":"monitoring paused","section":"summary"}]} {"unavailable":"system is paused, last seen 1d 1h ago"}`,
+		},
+		{
+			name: "another system's entry is ignored", sys: sys, lastSeen: map[string]time.Time{"otherotherother": {}},
+			want: `{"name":"web","status":"down","last_seen_ago_s":7200,"problems":[{"code":"status_down","detail":"down for 2h","section":"summary"}]} {"unavailable":"system is down, last seen 2h ago"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := FleetInput{Now: now, Systems: []hub.System{tt.sys}, LastSeen: tt.lastSeen}
+			f, err := Fleet(in, FleetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := Detail(DetailInput{FleetInput: in, System: tt.sys}, DetailOptions{Sections: []string{SectionCore}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := asJSON(t, f.Systems[0]) + " " + asJSON(t, d.Core); got != tt.want {
+				t.Fatalf("got  %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShort(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{59 * time.Second, "59s"},
+		{time.Minute, "1m"},
+		{59*time.Minute + 59*time.Second, "59m"},
+		{time.Hour, "1h"},
+		{time.Hour + 55*time.Minute, "1h 55m"},
+		{23*time.Hour + 59*time.Minute, "23h 59m"},
+		{24 * time.Hour, "1d"},
+		{25*time.Hour + 30*time.Minute, "1d 1h"},
+		{58*time.Hour + 20*time.Minute, "2d 10h"},
+		{30 * 24 * time.Hour, "30d"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := short(tt.d); got != tt.want {
+				t.Fatalf("short(%v) = %q, want %q", tt.d, got, tt.want)
 			}
 		})
 	}

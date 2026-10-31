@@ -43,7 +43,7 @@ func notChecked(d *hub.SystemDetails) string {
 }
 
 func updates(in DetailInput) *UpdatesSection {
-	if u := unavailable(in.System, in.Now); u != "" {
+	if u := in.unavailable(in.System); u != "" {
 		return &UpdatesSection{Unavailable: u}
 	}
 	if in.PackagesErr != nil {

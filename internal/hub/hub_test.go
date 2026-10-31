@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -185,6 +186,7 @@ func TestRequestShape(t *testing.T) {
 		wantFilter string
 		wantSort   string
 		wantFields string
+		perPage    string // "" means 1000
 	}{
 		{
 			name: "systems", call: func(ctx context.Context, c *Client) error { _, err := c.Systems(ctx); return err },
@@ -216,6 +218,15 @@ func TestRequestShape(t *testing.T) {
 			wantPath:   "/api/collections/zfs_pools/records",
 			wantSort:   "system,name",
 			wantFields: "system,name,display_name,health,status,size,alloc,free,scrub,vdevs,raw,updated",
+		},
+		{
+			name: "newest stats row of any type",
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.LastStatsAt(ctx, bravoID)
+				return err
+			},
+			wantPath:   "/api/collections/system_stats/records",
+			wantFilter: "system='f00000000000004'", wantSort: "-created", wantFields: "created", perPage: "1",
 		},
 		{
 			name: "monitor stats filter on unix ms",
@@ -258,7 +269,7 @@ func TestRequestShape(t *testing.T) {
 				"filter":        {q.Get("filter"), tt.wantFilter},
 				"sort":          {q.Get("sort"), tt.wantSort},
 				"fields":        {q.Get("fields"), tt.wantFields},
-				"perPage":       {q.Get("perPage"), "1000"},
+				"perPage":       {q.Get("perPage"), cmp.Or(tt.perPage, "1000")},
 				"skipTotal":     {q.Get("skipTotal"), "true"},
 				"page":          {q.Get("page"), "1"},
 			}
@@ -591,6 +602,46 @@ func TestTimeParsing(t *testing.T) {
 			err := json.Unmarshal([]byte(tt.in), &got)
 			if (err != nil) != tt.wantErr || (!tt.wantErr && !got.Equal(tt.want)) {
 				t.Errorf("got %v, err %v; want %v", got.Time, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLastStatsAt(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		body    string
+		want    string // RFC 3339, "" for the zero time
+		wantErr string
+	}{
+		{name: "newest row", id: bravoID, body: `{"items":[{"created":"2026-10-29 08:40:00.012Z"}]}`, want: "2026-10-29T08:40:00Z"},
+		{name: "no rows", id: bravoID, body: `{"items":[]}`},
+		{name: "unsafe id", id: "x' || 1=1", wantErr: "invalid system id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/api/beszel/info") {
+					_, _ = w.Write([]byte(`{"v":"0.21.1"}`))
+					return
+				}
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			got, err := c.LastStatsAt(t.Context(), tt.id)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			s := ""
+			if !got.IsZero() {
+				s = got.UTC().Truncate(time.Second).Format(time.RFC3339)
+			}
+			if err != nil || s != tt.want {
+				t.Fatalf("got %q, %v; want %q", s, err, tt.want)
 			}
 		})
 	}

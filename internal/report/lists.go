@@ -109,7 +109,7 @@ func enumName(names []string, i int) string {
 }
 
 func gpus(in DetailInput) *GPUs {
-	if u := unavailable(in.System, in.Now); u != "" {
+	if u := in.unavailable(in.System); u != "" {
 		return &GPUs{Unavailable: u}
 	}
 	if u := statsUnavailable(in); u != "" {
@@ -135,7 +135,7 @@ func gpus(in DetailInput) *GPUs {
 }
 
 func containers(in DetailInput, o DetailOptions) (*Containers, string) {
-	if u := unavailable(in.System, in.Now); u != "" {
+	if u := in.unavailable(in.System); u != "" {
 		return &Containers{Unavailable: u}, ""
 	}
 	if in.ContainersErr != nil {
@@ -179,7 +179,7 @@ func containers(in DetailInput, o DetailOptions) (*Containers, string) {
 }
 
 func services(in DetailInput, o DetailOptions) (*Services, string) {
-	if u := unavailable(in.System, in.Now); u != "" {
+	if u := in.unavailable(in.System); u != "" {
 		return &Services{Unavailable: u}, ""
 	}
 	if in.ServicesErr != nil {

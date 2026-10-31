@@ -22,16 +22,24 @@ func ageS(now, t time.Time) int64 {
 	return max(0, int64(now.Sub(t)/time.Second))
 }
 
-// short formats a duration as "45s", "7m", "3h" or "2d".
+// short formats a duration in up to two units: "45s", "7m", "1h 55m", "3h",
+// "2d 6h" or "2d". One floored unit read 1h55m as "1h".
 func short(d time.Duration) string {
+	two := func(big, small time.Duration, bigUnit, smallUnit string) string {
+		s := strconv.FormatInt(int64(d/big), 10) + bigUnit
+		if rest := d % big / small; rest > 0 {
+			s += " " + strconv.FormatInt(int64(rest), 10) + smallUnit
+		}
+		return s
+	}
 	switch {
 	case d < time.Minute:
 		return strconv.FormatInt(int64(d/time.Second), 10) + "s"
 	case d < time.Hour:
 		return strconv.FormatInt(int64(d/time.Minute), 10) + "m"
-	case d < 48*time.Hour:
-		return strconv.FormatInt(int64(d/time.Hour), 10) + "h"
+	case d < 24*time.Hour:
+		return two(time.Hour, time.Minute, "h", "m")
 	default:
-		return strconv.FormatInt(int64(d/(24*time.Hour)), 10) + "d"
+		return two(24*time.Hour, time.Hour, "d", "h")
 	}
 }

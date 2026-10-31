@@ -24,6 +24,7 @@ func TestDetailGolden(t *testing.T) {
 		Pools:          load[hub.ZfsPool](t, "handmade/zfs_pools.json"),
 		Monitors:       load[hub.Monitor](t, "hub/network_monitors.json"),
 	}
+	fleet.LastSeen = fixtureLastSeen(t, fleet.Systems)
 	details := load[hub.SystemDetails](t, "hub/system_details.json")
 	input := func(name string) DetailInput {
 		in := DetailInput{FleetInput: fleet}

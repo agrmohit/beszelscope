@@ -225,7 +225,7 @@ func summary(in DetailInput, row Row) *Summary {
 // core reads the newest stats sample. Every sensor is returned: names such
 // as "PMU tdie3" do not say what they measure, so a name filter misleads.
 func core(in DetailInput) *Core {
-	if u := unavailable(in.System, in.Now); u != "" {
+	if u := in.unavailable(in.System); u != "" {
 		return &Core{Unavailable: u}
 	}
 	if u := statsUnavailable(in); u != "" {
@@ -291,11 +291,15 @@ func statsUnavailable(in DetailInput) string {
 }
 
 // unavailable explains why live data is missing, or is "" for an up system.
-func unavailable(s hub.System, now time.Time) string {
+func (in FleetInput) unavailable(s hub.System) string {
 	if s.Status == "up" {
 		return ""
 	}
-	return fmt.Sprintf("system is %s, last seen %s ago", s.Status, short(now.Sub(s.Updated.Time)))
+	seen, none := in.lastSeen(s)
+	if none {
+		return fmt.Sprintf("system is %s, no data in the last 30 days", s.Status)
+	}
+	return fmt.Sprintf("system is %s, last seen %s ago", s.Status, short(in.Now.Sub(seen)))
 }
 
 func versionSkew(s hub.System, hubVersion string) string {

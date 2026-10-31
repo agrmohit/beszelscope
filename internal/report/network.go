@@ -51,7 +51,7 @@ type Cert struct {
 }
 
 func network(in DetailInput) *Network {
-	if u := unavailable(in.System, in.Now); u != "" {
+	if u := in.unavailable(in.System); u != "" {
 		return &Network{Unavailable: u}
 	}
 	if u := statsUnavailable(in); u != "" {

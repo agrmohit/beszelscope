@@ -90,8 +90,11 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	sys := systems[slices.IndexFunc(systems, func(s hub.System) bool { return s.ID == ids[0] })]
 
 	input := report.DetailInput{
-		FleetInput: report.FleetInput{Now: now, HubVersion: t.d.HubVersion, TokenExpiresAt: t.d.TokenExpiresAt, Systems: systems},
-		System:     sys,
+		FleetInput: report.FleetInput{
+			Now: now, HubVersion: t.d.HubVersion, TokenExpiresAt: t.d.TokenExpiresAt, Systems: systems,
+			LastSeen: map[string]time.Time{},
+		},
+		System: sys,
 	}
 	want := func(section string) bool {
 		return len(in.Sections) == 0 && section == report.SectionSummary || slices.Contains(in.Sections, section)
@@ -107,6 +110,9 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	// Each source is read once, and only for the sections that use it.
 	var fe fetcher
 	up := sys.Status == "up"
+	if !up {
+		t.lastSeen(ctx, &fe, sys, &input.FleetInput)
+	}
 	if want(report.SectionSummary) || want(report.SectionUpdates) && up {
 		fe.run("system details", "the summary lacks OS and CPU facts", func() error {
 			all, err := t.d.Hub.SystemDetails(ctx)

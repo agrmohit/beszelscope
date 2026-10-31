@@ -64,6 +64,10 @@ type FleetInput struct {
 	Smart            []hub.SmartDevice
 	Pools            []hub.ZfsPool
 	Monitors         []hub.Monitor
+	// LastSeen is when each system that is not up last sent data: its
+	// newest stats row. Zero means none in Beszel's 30-day retention; a
+	// missing entry means unknown, and systems.updated stands in.
+	LastSeen map[string]time.Time
 }
 
 // FleetOptions narrows the result.
@@ -196,12 +200,15 @@ func TokenWarning(now, expires time.Time) []string {
 
 func buildRow(in FleetInput, s hub.System) Row {
 	row := Row{Name: s.Name, Status: s.Status}
-	age := ageS(in.Now, s.Updated.Time)
 	if s.Status != "up" {
-		row.LastSeenAgoS = &age
-		row.Problems = statusProblem(s, in.Now)
+		seen, none := in.lastSeen(s)
+		if !none {
+			row.LastSeenAgoS = new(ageS(in.Now, seen))
+		}
+		row.Problems = statusProblem(s, in.Now, seen, none)
 		return row
 	}
+	age := ageS(in.Now, s.Updated.Time)
 
 	i := s.Info
 	row.AgeS = &age
@@ -245,11 +252,24 @@ func worstDisk(i hub.SystemInfo) (pct float64, name string) {
 	return pct, name
 }
 
-func statusProblem(s hub.System, now time.Time) []Problem {
-	since := short(now.Sub(s.Updated.Time))
+// lastSeen is when s last sent data; none reports no data in 30 days.
+// systems.updated is the fallback: Beszel bumps it on record rewrites, so it
+// can make a long-silent system look recently down.
+func (in FleetInput) lastSeen(s hub.System) (seen time.Time, none bool) {
+	t, ok := in.LastSeen[s.ID]
+	if !ok {
+		return s.Updated.Time, false
+	}
+	return t, t.IsZero()
+}
+
+func statusProblem(s hub.System, now, seen time.Time, none bool) []Problem {
 	switch s.Status {
 	case "down":
-		return []Problem{problem(CodeStatusDown, "down for "+since, 0)}
+		if none {
+			return []Problem{problem(CodeStatusDown, "down, no data in the last 30 days", 0)}
+		}
+		return []Problem{problem(CodeStatusDown, "down for "+short(now.Sub(seen)), 0)}
 	case "paused":
 		return []Problem{problem(CodeStatusPaused, "monitoring paused", 0)}
 	case "pending":

@@ -432,7 +432,7 @@ func TestHistoryEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.AsOf = time.Time{}
-	want := `{"as_of":"0001-01-01T00:00:00Z","window":{"span_s":3600,"resolution_s":60},"warnings":["hub token expires in 24h; renew it (see README)"],"series":[` +
+	want := `{"as_of":"0001-01-01T00:00:00Z","window":{"span_s":3600,"resolution_s":60},"warnings":["hub token expires in 1d; renew it (see README)"],"series":[` +
 		`{"system":"db","metric":"cpu","unit":"pct","buckets":0,"expected_buckets":60,"coverage_pct":0,"note":"no samples in this window"},` +
 		`{"system":"web","metric":"cpu","unit":"pct","avg":9,"min_bucket_avg":9,"peak":9,"high_ago_s":60,"last":9,"last_ago_s":60,"buckets":1,"expected_buckets":60,"coverage_pct":2}]}`
 	if got := asJSON(t, r); got != want {

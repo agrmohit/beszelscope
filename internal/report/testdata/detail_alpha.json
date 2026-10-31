@@ -2,8 +2,7 @@
   "as_of": "2026-10-30T22:42:22Z",
   "system": {
     "name": "alpha",
-    "status": "down",
-    "last_seen_ago_s": 4732
+    "status": "down"
   },
   "summary": {
     "os": "macOS 27.0.1",
@@ -16,19 +15,19 @@
     "problems": [
       {
         "code": "status_down",
-        "detail": "down for 1h",
+        "detail": "down, no data in the last 30 days",
         "section": "summary"
       }
     ]
   },
   "core": {
-    "unavailable": "system is down, last seen 1h ago"
+    "unavailable": "system is down, no data in the last 30 days"
   },
   "network": {
-    "unavailable": "system is down, last seen 1h ago"
+    "unavailable": "system is down, no data in the last 30 days"
   },
   "disk": {
-    "unavailable": "system is down, last seen 1h ago",
+    "unavailable": "system is down, no data in the last 30 days",
     "smart": [
       {
         "name": "NS_01@1",
@@ -47,15 +46,15 @@
     ]
   },
   "gpu": {
-    "unavailable": "system is down, last seen 1h ago"
+    "unavailable": "system is down, no data in the last 30 days"
   },
   "containers": {
-    "unavailable": "system is down, last seen 1h ago"
+    "unavailable": "system is down, no data in the last 30 days"
   },
   "services": {
-    "unavailable": "system is down, last seen 1h ago"
+    "unavailable": "system is down, no data in the last 30 days"
   },
   "updates": {
-    "unavailable": "system is down, last seen 1h ago"
+    "unavailable": "system is down, no data in the last 30 days"
   }
 }

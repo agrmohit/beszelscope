@@ -192,6 +192,18 @@ func TestSystemDetailReads(t *testing.T) {
 			want: []string{`"unavailable":"could not ask the agent for the package list: HTTP 503"`}, absent: []string{"warnings"},
 		},
 		{
+			name: "down system: last data read once", args: map[string]any{"system": "alpha", "sections": []any{"core"}},
+			want: []string{`"unavailable":"system is down, no data in the last 30 days"`}, once: []string{"LastStatsAt"},
+		},
+		{
+			name: "up system: no last-data read", args: map[string]any{"system": "bravo", "sections": []any{"core"}},
+			want: []string{`"core"`}, unread: []string{"LastStatsAt"},
+		},
+		{
+			name: "last data fails: updated stands in, with a warning", fail: "LastStatsAt", args: map[string]any{"system": "alpha"},
+			want: []string{`"detail":"down for 1h 18m"`, "could not read last data of alpha, so its last-seen time is when its status last changed"},
+		},
+		{
 			name: "down system updates: no live call", args: map[string]any{"system": "alpha", "sections": []any{"updates"}},
 			want: []string{`"updates":{"unavailable":"system is down`}, unread: []string{"PackageUpdates", "SystemDetails"},
 		},

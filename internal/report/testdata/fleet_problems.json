@@ -12,11 +12,10 @@
     {
       "name": "alpha",
       "status": "down",
-      "last_seen_ago_s": 4732,
       "problems": [
         {
           "code": "status_down",
-          "detail": "down for 1h",
+          "detail": "down, no data in the last 30 days",
           "section": "summary"
         }
       ]

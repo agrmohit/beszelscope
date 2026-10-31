@@ -94,6 +94,20 @@ func reply[T any](f *fakeHub, method string, v []T) ([]T, error) {
 	return v, nil
 }
 
+// LastStatsAt returns the newest stats row of systemID, of any type.
+func (f *fakeHub) LastStatsAt(_ context.Context, systemID string) (time.Time, error) {
+	if err := f.check("LastStatsAt"); err != nil {
+		return time.Time{}, err
+	}
+	var newest time.Time
+	for _, r := range f.stats {
+		if r.System == systemID && r.Created.After(newest) {
+			newest = r.Created.Time
+		}
+	}
+	return newest, nil
+}
+
 func (f *fakeHub) PackageUpdates(_ context.Context, systemID string) (hub.PackageUpdates, error) {
 	if err := f.check("PackageUpdates"); err != nil {
 		return hub.PackageUpdates{}, err
@@ -385,6 +399,8 @@ func TestFleetStatusPartialFailure(t *testing.T) {
 		{method: "Monitors", warning: "could not read network monitors"},
 		// alpha is down, so its container history is never fetched.
 		{method: "ContainerStats", warning: "could not read container history of bravo", absent: "container history of alpha"},
+		// Only alpha is down, so only its last data is read.
+		{method: "LastStatsAt", warning: "could not read last data of alpha, so its last-seen time is when its status last changed", absent: "last data of bravo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {

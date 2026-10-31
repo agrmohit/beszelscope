@@ -87,8 +87,8 @@ type FailingAttr struct {
 func disk(in DetailInput) *Disk {
 	d := &Disk{}
 	switch {
-	case unavailable(in.System, in.Now) != "":
-		d.Unavailable = unavailable(in.System, in.Now)
+	case in.unavailable(in.System) != "":
+		d.Unavailable = in.unavailable(in.System)
 	case statsUnavailable(in) != "":
 		d.Unavailable = statsUnavailable(in)
 	default:

@@ -404,6 +404,29 @@ func (c *Client) SystemStats(ctx context.Context, systemID string, t StatType, s
 	return list[SystemStats](ctx, c, "system_stats", "system,type,created,stats", f, "created")
 }
 
+// LastStatsAt returns when the system's newest stats row of any type was
+// created, or the zero time when it has none. Beszel bumps systems.updated
+// when it rewrites the record, so that time is not when data last arrived.
+func (c *Client) LastStatsAt(ctx context.Context, systemID string) (time.Time, error) {
+	if !recordID.MatchString(systemID) {
+		return time.Time{}, fmt.Errorf("invalid system id %q", systemID)
+	}
+	q := url.Values{
+		"fields": {"created"}, "filter": {"system='" + systemID + "'"}, "sort": {"-created"},
+		"perPage": {"1"}, "page": {"1"}, "skipTotal": {"true"},
+	}
+	var p page[struct {
+		Created Time `json:"created"`
+	}]
+	if err := c.get(ctx, "api/collections/system_stats/records", q, c.o.Timeout, &p); err != nil {
+		return time.Time{}, err
+	}
+	if len(p.Items) == 0 {
+		return time.Time{}, nil
+	}
+	return p.Items[0].Created.Time, nil
+}
+
 // ContainerStats returns a system's container samples of type t created at or after since, oldest first.
 func (c *Client) ContainerStats(ctx context.Context, systemID string, t StatType, since time.Time) ([]ContainerStats, error) {
 	f, err := statsFilter(systemID, t, "'"+since.UTC().Format("2006-01-02 15:04:05.000Z")+"'")
