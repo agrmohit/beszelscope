@@ -1,0 +1,211 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"maps"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+
+	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/agrmohit/beszelscope/cmd/internal/keychain"
+	"github.com/agrmohit/beszelscope/internal/config"
+)
+
+const keychainHelp = `Usage:
+  beszelscope token set      store the hub token in the Keychain, from a pipe or a prompt
+  beszelscope token status   show the token's source and expiry, and check it with the hub
+  beszelscope token list     list the hubs that have a stored token
+  beszelscope token delete   delete the hub token from the Keychain
+
+set, status and delete act on the hub in BESZELSCOPE_URL. No command prints a token.
+`
+
+// tokenCmd runs `beszelscope token ...`. tokens is nil off macOS.
+func tokenCmd(ctx context.Context, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer, tokens tokenStore) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		_, _ = io.WriteString(stderr, keychainHelp)
+		return nil
+	}
+	if tokens == nil {
+		return errors.New("token commands need the macOS Keychain; on this system set BESZELSCOPE_TOKEN instead")
+	}
+	cmd, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("token "+cmd, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() { _, _ = io.WriteString(stderr, keychainHelp) }
+	if err := fs.Parse(rest); errors.Is(err, flag.ErrHelp) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("token %s: %w", cmd, err)
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("token %s takes no arguments, got %q", cmd, fs.Args())
+	}
+
+	switch cmd {
+	case "set":
+		return tokenSet(ctx, env, stdin, stdout, stderr, tokens, isTerminal(stdin))
+	case "status":
+		return tokenStatus(ctx, env, stdout, tokens)
+	case "list":
+		return tokenList(ctx, stdout, tokens)
+	case "delete":
+		return tokenDelete(ctx, env, stdout, tokens)
+	default:
+		return fmt.Errorf("unknown token command %q; see beszelscope token --help", cmd)
+	}
+}
+
+func tokenSet(ctx context.Context, env map[string]string, stdin io.Reader, stdout, stderr io.Writer, tokens tokenStore, prompt bool) error {
+	tok, err := readToken(stdin, stderr, prompt)
+	if err != nil {
+		return err
+	}
+	// Check the new token alone: an env token here is a separate problem.
+	alone := maps.Clone(env)
+	delete(alone, "BESZELSCOPE_TOKEN")
+	cfg, err := config.Parse(alone, tok)
+	if err != nil {
+		return fmt.Errorf("not stored: %w", err)
+	}
+	now := time.Now()
+	if !cfg.TokenExpiresAt.After(now) {
+		return fmt.Errorf("not stored: the token expired %s", cfg.TokenExpiresAt.Format(time.RFC3339))
+	}
+
+	// A failed check only warns: the hub may be down while the token is fine.
+	if info, err := newHubClient(cfg, noop.NewTracerProvider()).Info(ctx); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: the hub check failed, storing anyway: %v\n", err)
+	} else {
+		_, _ = fmt.Fprintf(stdout, "hub accepted the token (Beszel %s)\n", info.Version)
+	}
+
+	host := cfg.HubURL.Hostname()
+	if err := tokens.Set(ctx, host, tok); err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	_, _ = fmt.Fprintf(stdout, "stored the token for %s (user %s, %s)\n", host, cfg.TokenUserID, expiry(now, cfg.TokenExpiresAt))
+	if env["BESZELSCOPE_TOKEN"] != "" {
+		_, _ = io.WriteString(stderr, "warning: BESZELSCOPE_TOKEN is also set; unset it, or the server refuses to start\n")
+	}
+	return nil
+}
+
+// readToken reads one token. On a terminal it prompts and reads one line;
+// otherwise it reads all of stdin.
+func readToken(stdin io.Reader, stderr io.Writer, prompt bool) (string, error) {
+	var raw string
+	if prompt {
+		_, _ = io.WriteString(stderr, "Paste the token and press Enter (it shows on screen): ")
+		line, err := bufio.NewReader(stdin).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("read token: %w", err)
+		}
+		raw = line
+	} else {
+		b, err := io.ReadAll(io.LimitReader(stdin, 64<<10))
+		if err != nil {
+			return "", fmt.Errorf("read token: %w", err)
+		}
+		raw = string(b)
+	}
+	tok := strings.TrimSpace(raw)
+	if tok == "" {
+		return "", errors.New("no token on stdin; try `pbpaste | beszelscope token set`")
+	}
+	return tok, nil
+}
+
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	st, err := f.Stat()
+	return err == nil && st.Mode()&os.ModeCharDevice != 0
+}
+
+func tokenStatus(ctx context.Context, env map[string]string, stdout io.Writer, tokens tokenStore) error {
+	stored, err := storedToken(ctx, tokens, env["BESZELSCOPE_URL"])
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Parse(env, stored)
+	if err != nil {
+		return err
+	}
+	source := "BESZELSCOPE_TOKEN"
+	if cfg.TokenSource == config.SourceKeychain {
+		source = "Keychain (service " + keychain.Service + ", account " + cfg.HubURL.Hostname() + ")"
+	}
+	_, _ = fmt.Fprintf(stdout, "hub      %s\nsource   %s\nuser     %s\ntoken    %s\n",
+		cfg.HubURL, source, cfg.TokenUserID, expiry(time.Now(), cfg.TokenExpiresAt))
+
+	info, err := newHubClient(cfg, noop.NewTracerProvider()).Info(ctx)
+	if err != nil {
+		_, _ = fmt.Fprintf(stdout, "check    failed: %v\n", err)
+		return errors.New("the hub check failed")
+	}
+	_, _ = fmt.Fprintf(stdout, "check    ok, Beszel %s\n", info.Version)
+	return nil
+}
+
+func tokenList(ctx context.Context, stdout io.Writer, tokens tokenStore) error {
+	hosts, err := tokens.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list: %w", err)
+	}
+	if len(hosts) == 0 {
+		_, _ = io.WriteString(stdout, "no tokens stored\n")
+		return nil
+	}
+	now := time.Now()
+	for _, host := range hosts {
+		line := "unreadable: "
+		tok, err := tokens.Get(ctx, host)
+		if err == nil {
+			var info config.TokenInfo
+			if info, err = config.ParseToken(tok); err == nil {
+				line = expiry(now, info.ExpiresAt)
+			}
+		}
+		if err != nil {
+			line += err.Error()
+		}
+		_, _ = fmt.Fprintf(stdout, "%s  %s\n", host, line)
+	}
+	return nil
+}
+
+func tokenDelete(ctx context.Context, env map[string]string, stdout io.Writer, tokens tokenStore) error {
+	u, err := url.Parse(env["BESZELSCOPE_URL"])
+	if err != nil || u.Hostname() == "" {
+		return errors.New("set BESZELSCOPE_URL to the hub whose token to delete")
+	}
+	host := u.Hostname()
+	if err := tokens.Delete(ctx, host); errors.Is(err, keychain.ErrNotFound) {
+		return fmt.Errorf("no token stored for %s", host)
+	} else if err != nil {
+		return fmt.Errorf("delete: %w", err)
+	}
+	_, _ = fmt.Fprintf(stdout, "deleted the token for %s\n", host)
+	return nil
+}
+
+// expiry renders when a token expires, with whole days to go or gone.
+func expiry(now, at time.Time) string {
+	days := int(at.Sub(now).Hours() / 24)
+	stamp := at.UTC().Format(time.RFC3339)
+	if !at.After(now) {
+		return fmt.Sprintf("expired %s (%d days ago)", stamp, -days)
+	}
+	return fmt.Sprintf("expires %s (%d days left)", stamp, days)
+}

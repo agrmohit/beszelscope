@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
@@ -50,7 +51,54 @@ func run(ctx context.Context, args, environ []string, stdin io.Reader, stdout, s
 	if len(args) == 0 {
 		return serve(ctx, envMap(environ), stdin, stdout, stderr, tokens)
 	}
-	return fmt.Errorf("unknown command %q; run beszelscope with no arguments to serve MCP over stdio", args[0])
+	switch args[0] {
+	case "token":
+		return tokenCmd(ctx, args[1:], envMap(environ), stdin, stdout, stderr, tokens)
+	case "version":
+		_, _ = io.WriteString(stdout, versionLine()+"\n")
+		return nil
+	case "-h", "--help", "help":
+		_, _ = io.WriteString(stderr, usage)
+		return nil
+	default:
+		return fmt.Errorf("unknown command %q; see beszelscope --help", args[0])
+	}
+}
+
+const usage = `beszelscope is a read-only MCP server for a Beszel hub.
+
+Usage:
+  beszelscope                serve MCP over stdin and stdout
+  beszelscope token ...      manage the hub token in the Keychain (macOS); see token --help
+  beszelscope version        print the version
+
+Environment:
+  BESZELSCOPE_URL                  hub URL, required
+  BESZELSCOPE_TOKEN                hub token, when it is not in the Keychain
+  BESZELSCOPE_ALLOW_INSECURE_HTTP  1 or true to allow http to a non-loopback hub
+  BESZELSCOPE_LOG_LEVEL            debug, info (default), warn or error
+  OTEL_EXPORTER_OTLP_ENDPOINT      turns on OTLP/HTTP trace and log export
+`
+
+// versionLine is the version with the commit and toolchain it was built from.
+func versionLine() string {
+	line := "beszelscope " + version
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return line
+	}
+	settings := map[string]string{}
+	for _, s := range info.Settings {
+		settings[s.Key] = s.Value
+	}
+	if rev := settings["vcs.revision"]; rev != "" {
+		line += " (" + rev[:min(12, len(rev))]
+		if settings["vcs.modified"] == "true" {
+			line += ", modified"
+		}
+		line += ")"
+	}
+	return line + " " + info.GoVersion + " " + runtime.GOOS + "/" + runtime.GOARCH
 }
 
 func envMap(environ []string) map[string]string {

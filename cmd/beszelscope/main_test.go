@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -52,7 +53,7 @@ func fakeHub(t *testing.T, status int) string {
 	return srv.URL
 }
 
-// fakeStore is a tokenStore with one token per account.
+// fakeStore is a tokenStore with one token per account. err fails every call.
 type fakeStore struct {
 	tokens map[string]string
 	err    error
@@ -68,9 +69,34 @@ func (s *fakeStore) Get(_ context.Context, account string) (string, error) {
 	return "", keychain.ErrNotFound
 }
 
-func (s *fakeStore) Set(context.Context, string, string) error { return nil }
-func (s *fakeStore) Delete(context.Context, string) error      { return nil }
-func (s *fakeStore) List(context.Context) ([]string, error)    { return nil, nil }
+func (s *fakeStore) Set(_ context.Context, account, token string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.tokens == nil {
+		s.tokens = map[string]string{}
+	}
+	s.tokens[account] = token
+	return nil
+}
+
+func (s *fakeStore) Delete(_ context.Context, account string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if _, ok := s.tokens[account]; !ok {
+		return keychain.ErrNotFound
+	}
+	delete(s.tokens, account)
+	return nil
+}
+
+func (s *fakeStore) List(context.Context) ([]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return slices.Sorted(maps.Keys(s.tokens)), nil
+}
 
 // logEvents returns the msg of every JSON log line.
 func logEvents(t *testing.T, logs string) []string {
@@ -99,7 +125,7 @@ func TestRunErrors(t *testing.T) {
 		wantErr string
 	}{
 		{name: "unknown command", args: []string{"serve"}, wantErr: `unknown command "serve"`},
-		{name: "unknown flag", args: []string{"--help"}, wantErr: `unknown command "--help"`},
+		{name: "unknown flag", args: []string{"-x"}, wantErr: `unknown command "-x"`},
 		{name: "no URL", environ: []string{"BESZELSCOPE_TOKEN=" + good}, wantErr: "BESZELSCOPE_URL"},
 		{name: "no token anywhere", environ: []string{"BESZELSCOPE_URL=" + url}, store: &fakeStore{}, wantErr: "no token: add one"},
 		{name: "no token, no keychain", environ: []string{"BESZELSCOPE_URL=" + url}, wantErr: "no token: add one"},

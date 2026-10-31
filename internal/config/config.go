@@ -153,7 +153,6 @@ func pickToken(keychain, envToken string) (tok, source string, err error) {
 	case envToken != "":
 		return envToken, SourceEnv, nil
 	default:
-		return "", "", errors.New("no token: add one to the Keychain (service beszelscope, account = hub host) " +
-			"or set BESZELSCOPE_TOKEN")
+		return "", "", errors.New("no token: add one with `beszelscope token set` (macOS) or set BESZELSCOPE_TOKEN")
 	}
 }

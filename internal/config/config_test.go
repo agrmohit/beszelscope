@@ -351,3 +351,40 @@ func TestSecretNeverPrints(t *testing.T) {
 		t.Errorf("Reveal() = %q, want the raw value", s.Reveal())
 	}
 }
+
+func TestParseToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		token   string
+		want    TokenInfo
+		wantErr string
+	}{
+		{name: "users token", token: usersToken(t), want: TokenInfo{UserID: testUserID, ExpiresAt: time.Unix(exp2036, 0).UTC()}},
+		{
+			name:  "expired token still parses",
+			token: makeToken(t, map[string]any{"id": "u1", "type": "auth", "collectionId": usersCollectionID, "exp": 1000}),
+			want:  TokenInfo{UserID: "u1", ExpiresAt: time.Unix(1000, 0).UTC()},
+		},
+		{name: "truncated", token: usersToken(t)[:128], wantErr: "beszelscope token set"},
+		{
+			name:    "superuser",
+			token:   makeToken(t, map[string]any{"id": "s1", "type": "auth", "collectionId": "pbc_3142635823", "exp": exp2036}),
+			wantErr: "not users",
+		},
+		{name: "empty", token: "", wantErr: "1 part(s)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseToken(tt.token)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("got %+v, %v; want %+v", got, err, tt.want)
+			}
+		})
+	}
+}

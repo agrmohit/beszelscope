@@ -24,6 +24,21 @@ func (c claims) expiry() time.Time {
 	return time.Unix(int64(c.Exp), 0).UTC()
 }
 
+// TokenInfo is what a token says about itself.
+type TokenInfo struct {
+	UserID    string
+	ExpiresAt time.Time // an expired token still parses
+}
+
+// ParseToken runs the same checks on tok as [Parse].
+func ParseToken(tok string) (TokenInfo, error) {
+	c, err := parseToken(tok)
+	if err != nil {
+		return TokenInfo{}, err
+	}
+	return TokenInfo{UserID: c.ID, ExpiresAt: c.expiry()}, nil
+}
+
 // parseToken checks the token's shape and claims. Only the hub can verify
 // the signature.
 func parseToken(tok string) (claims, error) {
@@ -38,7 +53,7 @@ func parseToken(tok string) (claims, error) {
 		// The `security -w` prompt silently keeps only 128 characters.
 		if len(tok) == 128 {
 			err = fmt.Errorf("%w: looks truncated by the macOS `security -w` prompt, which keeps 128 chars; "+
-				"store it with -w \"$(pbpaste)\" instead", err)
+				"store it with `pbpaste | beszelscope token set` instead", err)
 		}
 		return claims{}, err
 	}
