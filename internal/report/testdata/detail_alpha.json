@@ -1,0 +1,27 @@
+{
+  "as_of": "2026-10-30T22:42:22Z",
+  "system": {
+    "name": "alpha",
+    "status": "down",
+    "last_seen_ago_s": 4732
+  },
+  "summary": {
+    "os": "macOS 27.0.1",
+    "hostname": "alpha",
+    "arch": "arm64",
+    "cpu_model": "Apple M2",
+    "cores": 8,
+    "threads": 8,
+    "mem_total_bytes": 17179869184,
+    "problems": [
+      {
+        "code": "status_down",
+        "detail": "down for 1h",
+        "section": "summary"
+      }
+    ]
+  },
+  "core": {
+    "unavailable": "system is down, last seen 1h ago"
+  }
+}

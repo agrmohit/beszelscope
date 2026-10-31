@@ -1,0 +1,106 @@
+{
+  "as_of": "2026-10-30T22:42:22Z",
+  "system": {
+    "name": "charlie",
+    "status": "up",
+    "age_s": 30
+  },
+  "summary": {
+    "os": "macOS 27.0.1",
+    "hostname": "charlie.local",
+    "arch": "arm64",
+    "cpu_model": "Apple M4 Pro",
+    "cores": 14,
+    "threads": 14,
+    "mem_total_bytes": 51539607552,
+    "agent": "0.21.1",
+    "uptime_s": 171423,
+    "cpu_pct": 21.4,
+    "mem_pct": 78.2,
+    "disk_pct": 64.8,
+    "temp_hottest_c": 44.8,
+    "load_avg": [
+      3.41,
+      3.56,
+      3.59
+    ],
+    "load_per_thread": 0.24,
+    "net_bytes_per_s": 81262,
+    "gpu_pct": 15.9,
+    "battery": {
+      "pct": 100,
+      "state": "full"
+    }
+  },
+  "core": {
+    "sampled_ago_s": 30,
+    "cpu_pct": 21.4,
+    "cpu_breakdown_pct": {
+      "idle": 78.6,
+      "iowait": 0,
+      "irq": 0,
+      "nice": 0,
+      "softirq": 0,
+      "steal": 0,
+      "system": 8.1,
+      "user": 13.31
+    },
+    "cpu_cores_pct": [
+      50,
+      44,
+      38,
+      33,
+      8,
+      7,
+      6,
+      6,
+      5,
+      28,
+      25,
+      20,
+      17,
+      15
+    ],
+    "load_avg": [
+      3.41,
+      3.56,
+      3.59
+    ],
+    "mem": {
+      "total_bytes": 51539607552,
+      "used_bytes": 40296579072,
+      "cache_bytes": 11026776064,
+      "pct": 78.2
+    },
+    "swap": {
+      "total_bytes": 0,
+      "used_bytes": 0
+    },
+    "temps_c": {
+      "Apple GPU": 47.5,
+      "NAND CH0 temp": 33,
+      "PMU tdie1": 43.5,
+      "PMU tdie10": 42.7,
+      "PMU tdie11": 42.5,
+      "PMU tdie12": 42.5,
+      "PMU tdie13": 42.4,
+      "PMU tdie14": 42.1,
+      "PMU tdie2": 41.6,
+      "PMU tdie3": 43,
+      "PMU tdie4": 42.3,
+      "PMU tdie5": 42.8,
+      "PMU tdie6": 44.2,
+      "PMU tdie7": 43.3,
+      "PMU tdie8": 44.9,
+      "PMU tdie9": 42.4,
+      "gas gauge battery": 33
+    },
+    "battery": {
+      "pct": 100,
+      "state": "full"
+    },
+    "not_collected": [
+      "fans"
+    ]
+  }
+}

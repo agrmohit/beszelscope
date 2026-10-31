@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,7 +24,23 @@ import (
 	"github.com/agrmohit/beszelscope/internal/hub"
 )
 
-var captured = time.Date(2026, 10, 30, 22, 34, 59, 0, time.UTC)
+// captured is when the hub fixtures were taken. Tests read it from meta.json
+// so ages stay real after a recapture; a stale copy clamped them all to 0.
+var captured = fixtureTime()
+
+func fixtureTime() time.Time {
+	b, err := os.ReadFile("../hub/testdata/hub/meta.json")
+	if err != nil {
+		panic(err)
+	}
+	var meta struct {
+		CapturedAt time.Time `json:"captured_at"`
+	}
+	if err := json.Unmarshal(b, &meta); err != nil {
+		panic(err)
+	}
+	return meta.CapturedAt
+}
 
 // fakeHub serves fixed records; fail and panicOn make one method misbehave.
 type fakeHub struct {
@@ -33,43 +50,80 @@ type fakeHub struct {
 	smart      []hub.SmartDevice
 	pools      []hub.ZfsPool
 	monitors   []hub.Monitor
+	details    []hub.SystemDetails
+	stats      []hub.SystemStats
 	fail       map[string]error
 	panicOn    string
+
+	mu    sync.Mutex
+	calls []string // methods called, in any order
+}
+
+func (f *fakeHub) called(method string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.calls, method)
 }
 
 func (f *fakeHub) check(method string) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, method)
+	f.mu.Unlock()
 	if f.panicOn == method {
 		panic("boom in " + method)
 	}
 	return f.fail[method]
 }
 
+// reply returns v, or nothing with the error, as the real client does.
+func reply[T any](f *fakeHub, method string, v []T) ([]T, error) {
+	if err := f.check(method); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
 func (f *fakeHub) Systems(context.Context) ([]hub.System, error) {
-	return f.systems, f.check("Systems")
+	return reply(f, "Systems", f.systems)
 }
 
 func (f *fakeHub) Services(context.Context) ([]hub.Service, error) {
-	return f.services, f.check("Services")
+	return reply(f, "Services", f.services)
 }
 
 func (f *fakeHub) Containers(context.Context) ([]hub.Container, error) {
-	return f.containers, f.check("Containers")
+	return reply(f, "Containers", f.containers)
 }
 
 func (f *fakeHub) SmartDevices(context.Context) ([]hub.SmartDevice, error) {
-	return f.smart, f.check("SmartDevices")
+	return reply(f, "SmartDevices", f.smart)
 }
 
 func (f *fakeHub) ZfsPools(context.Context) ([]hub.ZfsPool, error) {
-	return f.pools, f.check("ZfsPools")
+	return reply(f, "ZfsPools", f.pools)
 }
 
 func (f *fakeHub) Monitors(context.Context) ([]hub.Monitor, error) {
-	return f.monitors, f.check("Monitors")
+	return reply(f, "Monitors", f.monitors)
+}
+
+func (f *fakeHub) SystemDetails(context.Context) ([]hub.SystemDetails, error) {
+	return reply(f, "SystemDetails", f.details)
+}
+
+// SystemStats returns the rows of systemID created at or after since.
+func (f *fakeHub) SystemStats(_ context.Context, systemID string, _ hub.StatType, since time.Time) ([]hub.SystemStats, error) {
+	var out []hub.SystemStats
+	for _, r := range f.stats {
+		if r.System == systemID && !r.Created.Before(since) {
+			out = append(out, r)
+		}
+	}
+	return reply(f, "SystemStats", out)
 }
 
 func (f *fakeHub) ContainerStats(context.Context, string, hub.StatType, time.Time) ([]hub.ContainerStats, error) {
-	return nil, f.check("ContainerStats")
+	return reply[hub.ContainerStats](f, "ContainerStats", nil)
 }
 
 func load[T any](t *testing.T, name string) []T {
@@ -101,7 +155,13 @@ func fixtureHub(t *testing.T) *fakeHub {
 		smart:      load[hub.SmartDevice](t, "hub/smart_devices.json"),
 		pools:      load[hub.ZfsPool](t, "handmade/zfs_pools.json"),
 		monitors:   load[hub.Monitor](t, "hub/network_monitors.json"),
-		fail:       map[string]error{},
+		details:    load[hub.SystemDetails](t, "hub/system_details.json"),
+		stats: slices.Concat(
+			load[hub.SystemStats](t, "hub/system_stats_latest_alpha.json"),
+			load[hub.SystemStats](t, "hub/system_stats_latest_bravo.json"),
+			load[hub.SystemStats](t, "hub/system_stats_latest_charlie.json"),
+		),
+		fail: map[string]error{},
 	}
 }
 
@@ -162,7 +222,12 @@ func connect(t *testing.T, h Hub, opts *mcp.ClientOptions) env {
 
 func call(t *testing.T, cs *mcp.ClientSession, args map[string]any, meta mcp.Meta) *mcp.CallToolResult {
 	t.Helper()
-	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "fleet_status", Arguments: args, Meta: meta})
+	return callTool(t, cs, "fleet_status", args, meta)
+}
+
+func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any, meta mcp.Meta) *mcp.CallToolResult {
+	t.Helper()
+	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args, Meta: meta})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
@@ -501,24 +566,39 @@ func TestCompletionLogAndPanics(t *testing.T) {
 
 func TestListing(t *testing.T) {
 	e := connect(t, fixtureHub(t), nil)
+	tool := func(name string) func(t *testing.T) string {
+		return func(t *testing.T) string {
+			res, err := e.cs.ListTools(t.Context(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tl := range res.Tools {
+				if tl.Name == name {
+					b, _ := json.Marshal(tl)
+					return string(b)
+				}
+			}
+			t.Fatalf("no tool %s", name)
+			return ""
+		}
+	}
 	tests := []struct {
 		name string
 		got  func(t *testing.T) string
 		want []string
 	}{
-		{name: "server instructions", want: []string{"Start with fleet_status"}, got: func(*testing.T) string {
+		{name: "server instructions", want: []string{"Use fleet_status for the whole fleet", "call system_detail for it directly"}, got: func(*testing.T) string {
 			return e.cs.InitializeResult().Instructions
 		}},
-		{name: "fleet_status definition", want: []string{
-			`"name":"fleet_status"`, `"readOnlyHint":true`, `"openWorldHint":false`, `"maxItems":20`,
-			`"uniqueItems":true`, `"additionalProperties":false`, "Start here for",
-		}, got: func(t *testing.T) string {
-			res, err := e.cs.ListTools(t.Context(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			b, _ := json.Marshal(res.Tools)
-			return string(b)
+		{name: "fleet_status definition", got: tool("fleet_status"), want: []string{
+			`"readOnlyHint":true`, `"openWorldHint":false`, `"maxItems":20`,
+			`"uniqueItems":true`, `"additionalProperties":false`, "for one named server, call system_detail directly",
+			`"items":{"type":"string"},"maxItems":20,"type":"array"`, "unique prefix works",
+		}},
+		{name: "system_detail definition", got: tool("system_detail"), want: []string{
+			`"readOnlyHint":true`, `"openWorldHint":false`, `"required":["system"]`, `"enum":["summary","core"]`,
+			`"maxItems":2,"type":"array"`, `"uniqueItems":true`, `"additionalProperties":false`, "one server",
+			"without sections you get summary", "every temperature and fan sensor", "PMU tdie sensors are the CPU dies", "unique prefix works",
 		}},
 	}
 	for _, tt := range tests {
@@ -528,6 +608,10 @@ func TestListing(t *testing.T) {
 				if !strings.Contains(got, w) {
 					t.Errorf("missing %s in %s", w, got)
 				}
+			}
+			// metric_history does not exist yet; naming it made models stall.
+			if strings.Contains(got, "metric_history") {
+				t.Errorf("mentions metric_history: %s", got)
 			}
 		})
 	}

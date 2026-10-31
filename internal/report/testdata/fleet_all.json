@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-10-30T22:34:59Z",
+  "as_of": "2026-10-30T22:42:22Z",
   "counts": {
     "total": 3,
     "up": 2,
@@ -12,7 +12,7 @@
     {
       "name": "alpha",
       "status": "down",
-      "last_seen_ago_s": 4289,
+      "last_seen_ago_s": 4732,
       "problems": [
         {
           "code": "status_down",
@@ -24,7 +24,7 @@
     {
       "name": "bravo",
       "status": "up",
-      "age_s": 0,
+      "age_s": 31,
       "cpu_pct": 7,
       "mem_pct": 66.8,
       "disk_pct": 40.1,
@@ -44,7 +44,7 @@
     {
       "name": "charlie",
       "status": "up",
-      "age_s": 0,
+      "age_s": 30,
       "cpu_pct": 21.4,
       "mem_pct": 78.2,
       "disk_pct": 64.8,

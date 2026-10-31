@@ -17,6 +17,24 @@ var update = flag.Bool("update", false, "rewrite golden files")
 
 var now = time.Date(2026, 10, 30, 22, 0, 0, 0, time.UTC)
 
+// captured is when the hub fixtures were taken. Tests read it from meta.json
+// so ages stay real after a recapture; a stale copy clamped them all to 0.
+var captured = fixtureTime()
+
+func fixtureTime() time.Time {
+	b, err := os.ReadFile("../hub/testdata/hub/meta.json")
+	if err != nil {
+		panic(err)
+	}
+	var meta struct {
+		CapturedAt time.Time `json:"captured_at"`
+	}
+	if err := json.Unmarshal(b, &meta); err != nil {
+		panic(err)
+	}
+	return meta.CapturedAt
+}
+
 func ago(d time.Duration) hub.Time { return hub.Time{Time: now.Add(-d)} }
 
 func upSystem() hub.System {
@@ -452,7 +470,6 @@ func load[T any](t *testing.T, name string) []T {
 // TestFleetGolden runs the real (sanitised) fixtures through Fleet and
 // compares the exact JSON the model would get. Run with -update to rewrite.
 func TestFleetGolden(t *testing.T) {
-	captured := time.Date(2026, 10, 30, 22, 34, 59, 0, time.UTC)
 	in := FleetInput{
 		Now:            captured,
 		HubVersion:     "0.21.1",

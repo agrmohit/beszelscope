@@ -257,7 +257,7 @@ func TestServeMCP(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	if !slices.Equal(names, []string{"fleet_status"}) {
+	if !slices.Equal(names, []string{"fleet_status", "system_detail"}) {
 		t.Fatalf("tools = %q", names)
 	}
 	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "fleet_status", Arguments: map[string]any{}})

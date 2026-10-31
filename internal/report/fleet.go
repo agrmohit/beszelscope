@@ -146,10 +146,7 @@ func Fleet(in FleetInput, o FleetOptions) (FleetResult, error) {
 		if len(row.Problems) > 0 {
 			out.Counts.WithProblems++
 		}
-		if s.Status == "up" && in.HubVersion != "" && s.Info.AgentVersion != "" && s.Info.AgentVersion != in.HubVersion {
-			out.Warnings = append(out.Warnings,
-				fmt.Sprintf("%s runs agent %s; hub is %s", s.Name, s.Info.AgentVersion, in.HubVersion))
-		}
+		out.Warnings = appendNonEmpty(out.Warnings, versionSkew(s, in.HubVersion))
 		if o.ProblemsOnly && len(row.Problems) == 0 {
 			continue
 		}
