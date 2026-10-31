@@ -467,5 +467,10 @@
     "absent": [
       "services: none reported; Beszel reads systemd units on Linux only"
     ]
+  },
+  "updates": {
+    "absent": [
+      "updates: Beszel checks packages only on Linux; this host runs macOS 27.0.1"
+    ]
   }
 }

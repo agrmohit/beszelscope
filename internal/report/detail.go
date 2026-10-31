@@ -18,23 +18,26 @@ const (
 	SectionGPU        = "gpu"
 	SectionContainers = "containers"
 	SectionServices   = "services"
+	SectionUpdates    = "updates"
 )
 
 // Sections lists every section system_detail accepts.
-var Sections = []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices}
+var Sections = []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices, SectionUpdates}
 
 // DetailInput is everything system_detail reads for one system, already
 // fetched. FleetInput carries the problem sources the summary needs.
 type DetailInput struct {
 	FleetInput
-	System  hub.System
-	Details *hub.SystemDetails // nil when the hub has none
-	Latest  *hub.SystemStats   // newest stats sample; nil when there is none
-	// StatsErr, ContainersErr and ServicesErr say why a read failed; the
-	// sections that need it report it.
+	System   hub.System
+	Details  *hub.SystemDetails  // nil when the hub has none
+	Latest   *hub.SystemStats    // newest stats sample; nil when there is none
+	Packages *hub.PackageUpdates // live from the agent; nil when not read
+	// StatsErr, ContainersErr, ServicesErr and PackagesErr say why a read
+	// failed; the sections that need it report it.
 	StatsErr      error
 	ContainersErr error
 	ServicesErr   error
+	PackagesErr   error
 }
 
 // DetailOptions picks what system_detail returns.
@@ -49,17 +52,18 @@ type DetailOptions struct {
 
 // DetailResult is the system_detail output. Only requested sections are set.
 type DetailResult struct {
-	AsOf       time.Time   `json:"as_of"`
-	System     SystemRef   `json:"system"`
-	Warnings   []string    `json:"warnings,omitempty"`
-	Hints      []string    `json:"hints,omitempty"` // which list knob to change when rows were cut or nothing matched
-	Summary    *Summary    `json:"summary,omitempty"`
-	Core       *Core       `json:"core,omitempty"`
-	Network    *Network    `json:"network,omitempty"`
-	Disk       *Disk       `json:"disk,omitempty"`
-	GPU        *GPUs       `json:"gpu,omitempty"`
-	Containers *Containers `json:"containers,omitempty"`
-	Services   *Services   `json:"services,omitempty"`
+	AsOf       time.Time       `json:"as_of"`
+	System     SystemRef       `json:"system"`
+	Warnings   []string        `json:"warnings,omitempty"`
+	Hints      []string        `json:"hints,omitempty"` // which list knob to change when rows were cut or nothing matched
+	Summary    *Summary        `json:"summary,omitempty"`
+	Core       *Core           `json:"core,omitempty"`
+	Network    *Network        `json:"network,omitempty"`
+	Disk       *Disk           `json:"disk,omitempty"`
+	GPU        *GPUs           `json:"gpu,omitempty"`
+	Containers *Containers     `json:"containers,omitempty"`
+	Services   *Services       `json:"services,omitempty"`
+	Updates    *UpdatesSection `json:"updates,omitempty"`
 }
 
 // SystemRef names the system and how fresh its data is.
@@ -184,6 +188,8 @@ func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
 			var hint string
 			out.Services, hint = services(in, o)
 			out.Hints = appendNonEmpty(out.Hints, hint)
+		case SectionUpdates:
+			out.Updates = updates(in)
 		default:
 			return DetailResult{}, fmt.Errorf("unknown section %q; want one of %s", sec, strings.Join(Sections, ", "))
 		}

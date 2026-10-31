@@ -42,7 +42,7 @@ func TestDetailGolden(t *testing.T) {
 		}
 		return in
 	}
-	both := []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices}
+	both := []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices, SectionUpdates}
 	tests := []struct {
 		name   string
 		system string
@@ -136,7 +136,7 @@ func TestDetailEnvelope(t *testing.T) {
 			name: "matching hub version does not warn", sys: up, hub: "0.21.1", sections: []string{SectionCore},
 			want: `{"system":{"name":"web","status":"up","age_s":30},"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"absent":["battery: not reported by this host","fans: not reported by this host","memory: agent older than 0.21.1 reports no byte counts","temperatures: not reported by this host"]}}`,
 		},
-		{name: "unknown section", sys: up, sections: []string{"alerts"}, wantErr: `unknown section "alerts"; want one of summary, core, network, disk, gpu, containers, services`},
+		{name: "unknown section", sys: up, sections: []string{"alerts"}, wantErr: `unknown section "alerts"; want one of summary, core, network, disk, gpu, containers, services, updates`},
 		{name: "unknown sort", sys: up, sort: "size", wantErr: `unknown sort "size"; want one of cpu, mem, name`},
 		{name: "negative limit", sys: up, limit: -1, wantErr: "limit -1 out of range 1-200"},
 		{name: "limit past the cap", sys: up, limit: 201, wantErr: "limit 201 out of range 1-200"},

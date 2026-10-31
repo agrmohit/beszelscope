@@ -522,3 +522,88 @@ func TestDetailHints(t *testing.T) {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
+
+func TestDetailUpdates(t *testing.T) {
+	up := upSystem()
+	withPU := func(pu ...uint16) hub.System { s := up; s.Info.PackageUpdates = pu; return s }
+	checked := now.Add(-40 * time.Minute).Unix()
+	pkgs := []hub.Package{
+		{Name: "vim", Current: "9.1", Available: "9.2"},
+		{Name: "Zsh", Available: "5.3"},
+		{Name: "openssl", Current: "3.5.1", Available: "3.5.2", Security: true},
+		{Name: "curl", Current: "8.1", Available: "8.2", Security: true},
+	}
+	tests := []struct {
+		name     string
+		sys      hub.System
+		details  *hub.SystemDetails
+		packages *hub.PackageUpdates
+		readErr  error
+		want     string
+	}{
+		{
+			name: "security first, then name ignoring case (vim before Zsh); versions; check age", sys: up,
+			packages: &hub.PackageUpdates{Manager: "dnf", CheckedAt: checked, SecurityKnown: true, Packages: pkgs},
+			want:     `{"total":4,"security":2,"manager":"dnf","checked_ago_s":2400,"packages":[{"name":"curl","current":"8.1","available":"8.2","security":true},{"name":"openssl","current":"3.5.1","available":"3.5.2","security":true},{"name":"vim","current":"9.1","available":"9.2"},{"name":"Zsh","available":"5.3"}]}`,
+		},
+		{
+			name: "manager does not flag security: no security count", sys: up,
+			packages: &hub.PackageUpdates{Manager: "pacman", CheckedAt: checked, Packages: pkgs[:2]},
+			want:     `{"total":2,"manager":"pacman","checked_ago_s":2400,"packages":[{"name":"vim","current":"9.1","available":"9.2"},{"name":"Zsh","available":"5.3"}]}`,
+		},
+		{
+			name: "checked, nothing pending", sys: up,
+			packages: &hub.PackageUpdates{Manager: "apt", CheckedAt: checked, SecurityKnown: true, Packages: []hub.Package{}},
+			want:     `{"total":0,"security":0,"manager":"apt","checked_ago_s":2400}`,
+		},
+		{
+			name: "first check still running", sys: up, packages: &hub.PackageUpdates{Manager: "apt"},
+			want: `{"manager":"apt","absent":["updates: the agent's first package check has not finished"]}`,
+		},
+		{
+			name: "agent does not check packages", sys: up, packages: &hub.PackageUpdates{Packages: []hub.Package{}},
+			want: `{"absent":["updates: this agent does not check packages; Beszel checks them only on agents running natively on Linux, not in a container"]}`,
+		},
+		{
+			name: "macOS: names the OS", sys: up, details: &hub.SystemDetails{OS: 1, OSName: "macOS 27.0.1"}, packages: &hub.PackageUpdates{},
+			want: `{"absent":["updates: Beszel checks packages only on Linux; this host runs macOS 27.0.1"]}`,
+		},
+		{
+			name: "FreeBSD without a name", sys: up, details: &hub.SystemDetails{OS: 3}, packages: &hub.PackageUpdates{},
+			want: `{"absent":["updates: Beszel checks packages only on Linux; this host runs FreeBSD"]}`,
+		},
+		{
+			name: "Linux: container, turned off or no manager", sys: up, details: &hub.SystemDetails{OS: 0, OSName: "Fedora Linux 44"}, packages: &hub.PackageUpdates{},
+			want: `{"absent":["updates: this Linux agent does not check packages; it runs in a container, has checks turned off, or found no supported package manager"]}`,
+		},
+		{
+			name: "list not read", sys: up,
+			want: `{"absent":["updates: this agent does not check packages; Beszel checks them only on agents running natively on Linux, not in a container"]}`,
+		},
+		{
+			name: "live call failed: counts from the systems row", sys: withPU(12, 3), readErr: errors.New("HTTP 500"),
+			want: `{"unavailable":"could not ask the agent for the package list: HTTP 500","total":12,"security":3}`,
+		},
+		{
+			name: "live call failed, total only", sys: withPU(12), readErr: errors.New("HTTP 500"),
+			want: `{"unavailable":"could not ask the agent for the package list: HTTP 500","total":12}`,
+		},
+		{
+			name: "live call failed, no counts", sys: up, readErr: errors.New("HTTP 500"),
+			want: `{"unavailable":"could not ask the agent for the package list: HTTP 500"}`,
+		},
+		{name: "down system", sys: down(), packages: &hub.PackageUpdates{Manager: "dnf", CheckedAt: checked}, want: `{"unavailable":"system is down, last seen 19m ago"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Details: tt.details, Packages: tt.packages, PackagesErr: tt.readErr}
+			r, err := Detail(in, DetailOptions{Sections: []string{SectionUpdates}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := asJSON(t, r.Updates); got != tt.want {
+				t.Fatalf("got  %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}

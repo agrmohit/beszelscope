@@ -54,5 +54,8 @@
   },
   "services": {
     "unavailable": "system is down, last seen 1h ago"
+  },
+  "updates": {
+    "unavailable": "system is down, last seen 1h ago"
   }
 }

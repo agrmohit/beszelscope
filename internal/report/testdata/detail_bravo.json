@@ -653,5 +653,10 @@
         "mem_peak_bytes": 3362816
       }
     ]
+  },
+  "updates": {
+    "absent": [
+      "updates: this Linux agent does not check packages; it runs in a container, has checks turned off, or found no supported package manager"
+    ]
   }
 }

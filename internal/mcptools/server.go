@@ -37,6 +37,7 @@ type Hub interface {
 	SystemDetails(ctx context.Context) ([]hub.SystemDetails, error)
 	SystemStats(ctx context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.SystemStats, error)
 	ContainerStats(ctx context.Context, systemID string, t hub.StatType, since time.Time) ([]hub.ContainerStats, error)
+	PackageUpdates(ctx context.Context, systemID string) (hub.PackageUpdates, error)
 }
 
 // Deps are everything the tools need, built by cmd/beszelscope.

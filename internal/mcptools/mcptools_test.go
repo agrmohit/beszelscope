@@ -52,6 +52,7 @@ type fakeHub struct {
 	monitors   []hub.Monitor
 	details    []hub.SystemDetails
 	stats      []hub.SystemStats
+	packages   map[string]hub.PackageUpdates // by system ID; the captured fixture is empty
 	fail       map[string]error
 	panicOn    string
 
@@ -89,6 +90,13 @@ func reply[T any](f *fakeHub, method string, v []T) ([]T, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+func (f *fakeHub) PackageUpdates(_ context.Context, systemID string) (hub.PackageUpdates, error) {
+	if err := f.check("PackageUpdates"); err != nil {
+		return hub.PackageUpdates{}, err
+	}
+	return f.packages[systemID], nil
 }
 
 func (f *fakeHub) Systems(context.Context) ([]hub.System, error) {
@@ -604,10 +612,11 @@ func TestListing(t *testing.T) {
 			`"items":{"type":"string"},"maxItems":20,"type":"array"`, "unique prefix works",
 		}},
 		{name: "system_detail definition", got: tool("system_detail"), want: []string{
-			`"readOnlyHint":true`, `"openWorldHint":false`, `"required":["system"]`, `"enum":["summary","core","network","disk","gpu","containers","services"]`,
-			`"maxItems":7,"type":"array"`, `"enum":["cpu","mem","name"]`, `"maximum":200,"minimum":1`, `"uniqueItems":true`, `"additionalProperties":false`, "one server",
+			`"readOnlyHint":true`, `"openWorldHint":false`, `"required":["system"]`, `"enum":["summary","core","network","disk","gpu","containers","services","updates"]`,
+			`"maxItems":8,"type":"array"`, `"enum":["cpu","mem","name"]`, `"maximum":200,"minimum":1`, `"uniqueItems":true`, `"additionalProperties":false`, "one server",
 			"without sections you get summary", "every temperature and fan sensor", "PMU tdie sensors are the CPU dies", "unique prefix works",
 			"listed in gone", "shape the containers and services lists only", "25 when omitted",
+			"security updates first", "natively on Linux",
 		}},
 	}
 	for _, tt := range tests {

@@ -30,6 +30,8 @@ const detailDescription = "Current detail for one server monitored by the Beszel
 	"containers has running containers with health, CPU, memory and network; Beszel drops a stopped container " +
 	"within 10 minutes, and containers that stopped in the last hour are listed in gone. " +
 	"services has systemd units with state, CPU and memory. " +
+	"updates has pending package updates with versions, security updates first; " +
+	"Beszel checks packages only on agents running natively on Linux. " +
 	"filter, problems_only, sort and limit shape the containers and services lists only; " +
 	"problem rows (unhealthy containers, failed units) always come first and are never cut, and hints say when rows were left out. " +
 	"Values are the latest 60 s poll and include no history."
@@ -104,10 +106,18 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	}
 	// Each source is read once, and only for the sections that use it.
 	var fe fetcher
-	if want(report.SectionSummary) {
-		t.fetchSummary(ctx, &fe, &input)
-	}
 	up := sys.Status == "up"
+	if want(report.SectionSummary) || want(report.SectionUpdates) && up {
+		fe.run("system details", "the summary lacks OS and CPU facts", func() error {
+			all, err := t.d.Hub.SystemDetails(ctx)
+			for i := range all {
+				if all[i].System == sys.ID {
+					input.Details = &all[i]
+				}
+			}
+			return err
+		})
+	}
 	if want(report.SectionSummary) || want(report.SectionServices) && up {
 		fe.run("systemd services", "related problems may be missing", func() (err error) {
 			input.Services, err = t.d.Hub.Services(ctx)
@@ -151,6 +161,17 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 			return nil
 		})
 	}
+	if want(report.SectionUpdates) && up {
+		fe.run("package updates", "", func() error {
+			p, err := t.d.Hub.PackageUpdates(ctx, sys.ID)
+			if err != nil {
+				input.PackagesErr = err
+				return nil // the updates section reports it
+			}
+			input.Packages = &p
+			return nil
+		})
+	}
 	warnings := fe.wait()
 
 	res, err := report.Detail(input, report.DetailOptions{
@@ -161,21 +182,6 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	}
 	res.Warnings = append(res.Warnings, warnings...)
 	return nil, res, nil
-}
-
-// fetchSummary starts the read only the summary needs: the static facts.
-// The problem sources are read by the caller, since other sections use them too.
-func (t *tools) fetchSummary(ctx context.Context, fe *fetcher, in *report.DetailInput) {
-	sys := in.System
-	fe.run("system details", "the summary lacks OS and CPU facts", func() error {
-		all, err := t.d.Hub.SystemDetails(ctx)
-		for i := range all {
-			if all[i].System == sys.ID {
-				in.Details = &all[i]
-			}
-		}
-		return err
-	})
 }
 
 // systems lists every system. A rejected token offers renewal once, when

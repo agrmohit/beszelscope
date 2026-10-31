@@ -15,7 +15,7 @@ import (
 // TestSystemDetailMatchesReport: over MCP, the structured result is exactly
 // the report package's golden output for the same fixtures.
 func TestSystemDetailMatchesReport(t *testing.T) {
-	both := []any{"summary", "core", "network", "disk", "gpu", "containers", "services"}
+	both := []any{"summary", "core", "network", "disk", "gpu", "containers", "services", "updates"}
 	tests := []struct {
 		name   string
 		args   map[string]any
@@ -167,9 +167,37 @@ func TestSystemDetailReads(t *testing.T) {
 		},
 		{
 			name: "every section reads each source once",
-			args: map[string]any{"system": "bravo", "sections": []any{"summary", "core", "network", "disk", "gpu", "containers", "services"}},
-			want: []string{`"summary"`, `"core"`, `"network"`, `"disk"`, `"gpu"`, `"containers"`, `"services"`},
-			once: []string{"Systems", "SystemDetails", "Services", "Containers", "SmartDevices", "ZfsPools", "Monitors", "ContainerStats", "SystemStats"},
+			args: map[string]any{"system": "bravo", "sections": []any{"summary", "core", "network", "disk", "gpu", "containers", "services", "updates"}},
+			want: []string{`"summary"`, `"core"`, `"network"`, `"disk"`, `"gpu"`, `"containers"`, `"services"`, `"updates"`},
+			once: []string{"Systems", "SystemDetails", "Services", "Containers", "SmartDevices", "ZfsPools", "Monitors", "ContainerStats", "SystemStats", "PackageUpdates"},
+		},
+		{
+			name: "updates alone: one live call only", args: map[string]any{"system": "bravo", "sections": []any{"updates"}},
+			setup: func(h *fakeHub) {
+				h.packages = map[string]hub.PackageUpdates{"f00000000000004": {
+					Manager: "dnf", CheckedAt: h.stats[0].Created.Unix(), SecurityKnown: true,
+					Packages: []hub.Package{{Name: "vim", Available: "9.2"}, {Name: "openssl", Current: "3.5.1", Available: "3.5.2", Security: true}},
+				}}
+			},
+			want:   []string{`"manager":"dnf"`, `"security":1,"total":2`, `"packages":[{"available":"3.5.2","current":"3.5.1","name":"openssl","security":true},{"available":"9.2","name":"vim"}]`},
+			unread: []string{"Services", "Containers", "SmartDevices", "ZfsPools", "Monitors", "ContainerStats", "SystemStats"},
+			once:   []string{"PackageUpdates", "SystemDetails"},
+		},
+		{
+			name: "updates on the Mac name macOS", args: map[string]any{"system": "charlie", "sections": []any{"updates"}},
+			want: []string{"this host runs macOS 27.0.1"}, absent: []string{`"summary"`},
+		},
+		{
+			name: "updates fail: the section says so, no warning", fail: "PackageUpdates", args: map[string]any{"system": "bravo", "sections": []any{"updates"}},
+			want: []string{`"unavailable":"could not ask the agent for the package list: HTTP 503"`}, absent: []string{"warnings"},
+		},
+		{
+			name: "down system updates: no live call", args: map[string]any{"system": "alpha", "sections": []any{"updates"}},
+			want: []string{`"updates":{"unavailable":"system is down`}, unread: []string{"PackageUpdates", "SystemDetails"},
+		},
+		{
+			name: "summary alone: no live call", args: map[string]any{"system": "bravo"},
+			want: []string{`"summary"`}, unread: []string{"PackageUpdates"},
 		},
 		{
 			name: "gpu alone: stats only", args: map[string]any{"system": "charlie", "sections": []any{"gpu"}},
