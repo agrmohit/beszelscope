@@ -129,7 +129,7 @@ func Fleet(in FleetInput, o FleetOptions) (FleetResult, error) {
 	if err != nil {
 		return FleetResult{}, err
 	}
-	out := FleetResult{AsOf: in.Now.UTC().Truncate(time.Second), Warnings: tokenWarning(in.Now, in.TokenExpiresAt)}
+	out := FleetResult{AsOf: in.Now.UTC().Truncate(time.Second), Warnings: TokenWarning(in.Now, in.TokenExpiresAt)}
 	for _, s := range systems {
 		row := buildRow(in, s)
 		out.Counts.Total++
@@ -180,7 +180,9 @@ func selectSystems(all []hub.System, refs []string) ([]hub.System, error) {
 	return out, nil
 }
 
-func tokenWarning(now, expires time.Time) []string {
+// TokenWarning returns the warning for a token that has expired or expires
+// within 30 days, or nil. A zero expires means unknown.
+func TokenWarning(now, expires time.Time) []string {
 	if expires.IsZero() {
 		return nil
 	}
