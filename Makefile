@@ -65,10 +65,9 @@ workflows: ## Lint GitHub workflows with actionlint and zizmor
 	@# actionlint v1.7.12 predates `uses: $$/...` and `cache-mode`; drop the
 	@# ignores once a release accepts them.
 	$(ACTIONLINT) -ignore 'reusable workflow call "\$$/' -ignore 'unexpected key "cache-mode"'
-	@# zizmor's online audits need a token, and it rejects an empty one.
-	token="$${ZIZMOR_GITHUB_TOKEN:-$$(gh auth token 2>/dev/null || true)}"; \
-		if [ -n "$$token" ]; then export ZIZMOR_GITHUB_TOKEN="$$token"; fi; \
-		$(ZIZMOR) .github/workflows
+	@# Online audits run only with ZIZMOR_GITHUB_TOKEN, which CI sets to the
+	@# read-only job token. Never hand it a personal login token.
+	$(ZIZMOR) .github/workflows
 
 build: ## Build bin/beszelscope with the git version stamped in
 	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o $(BIN) ./cmd/beszelscope
