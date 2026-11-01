@@ -28,19 +28,14 @@ const (
 var Sections = []Section{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices, SectionUpdates}
 
 // DetailInput is everything system_detail reads for one system, already
-// fetched. FleetInput carries the problem sources the summary needs.
+// fetched. FleetInput carries the problem sources the summary needs; its
+// Systems is unused.
 type DetailInput struct {
 	FleetInput
 	System   hub.System
-	Details  *hub.SystemDetails  // nil when the hub has none
-	Latest   *hub.SystemStats    // newest stats sample; nil when there is none
-	Packages *hub.PackageUpdates // live from the agent; nil when not read
-	// StatsErr, ContainersErr, ServicesErr and PackagesErr say why a read
-	// failed; the sections that need it report it.
-	StatsErr      error
-	ContainersErr error
-	ServicesErr   error
-	PackagesErr   error
+	Details  Read[*hub.SystemDetails]  // nil when the hub has none
+	Latest   Read[*hub.SystemStats]    // newest stats sample; nil when there is none
+	Packages Read[*hub.PackageUpdates] // live from the agent
 }
 
 // DetailOptions picks what system_detail returns.
@@ -164,14 +159,13 @@ func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
 		System:   SystemRef{Name: s.Name, Status: s.Status, AgeS: row.AgeS, LastSeenAgoS: row.LastSeenAgoS},
 		Warnings: TokenWarning(in.Now, in.TokenExpiresAt),
 	}
-	if w := versionSkew(s, in.HubVersion); w != "" {
-		out.Warnings = append(out.Warnings, w)
-	}
+	out.Warnings = appendNonEmpty(out.Warnings, versionSkew(s, in.HubVersion))
 
 	sections := o.Sections
 	if len(sections) == 0 {
 		sections = []Section{SectionSummary}
 	}
+	out.Warnings = append(out.Warnings, detailReadsFailed(in, slices.Contains(sections, SectionSummary))...)
 	for _, sec := range sections {
 		switch sec {
 		case SectionSummary:
@@ -201,9 +195,29 @@ func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
 	return out, nil
 }
 
+// detailReadsFailed warns of failed reads that no section reports itself.
+// The list sections report their own failure, so only the summary's
+// problems need a warning for those reads.
+func detailReadsFailed(in DetailInput, summary bool) []string {
+	const rowsMissing = "its rows and related problems may be missing"
+	s := in.System
+	failed := lastSeenFailed(nil, in.FleetInput, s)
+	failed = readFailed(failed, "system details", "the summary lacks OS and CPU facts", in.Details.Err)
+	if summary {
+		failed = readFailed(failed, "systemd services", problemsMissing, in.Services.Err)
+		failed = readFailed(failed, "containers", problemsMissing, in.Containers.Err)
+	}
+	failed = readFailed(failed, "container history", "stopped containers may be missing", in.RecentContainers[s.ID].Err)
+	failed = readFailed(failed, "network monitors", rowsMissing, in.Monitors.Err)
+	failed = readFailed(failed, "SMART devices", rowsMissing, in.Smart.Err)
+	failed = readFailed(failed, "storage pools", rowsMissing, in.Pools.Err)
+	slices.Sort(failed)
+	return failed
+}
+
 func summary(in DetailInput, row Row) *Summary {
 	out := &Summary{Problems: row.Problems}
-	if d := in.Details; d != nil {
+	if d := in.Details.Val; d != nil {
 		out.OS, out.Kernel, out.Hostname, out.Arch = osName(*d), d.Kernel, d.Hostname, d.Arch
 		out.CPUModel, out.Cores, out.Threads, out.MemTotalBytes = d.CPU, d.Cores, d.Threads, d.Memory
 	}
@@ -229,15 +243,12 @@ func summary(in DetailInput, row Row) *Summary {
 // core reads the newest stats sample. Every sensor is returned: names such
 // as "PMU tdie3" do not say what they measure, so a name filter misleads.
 func core(in DetailInput) *Core {
-	if u := in.unavailable(in.System); u != "" {
+	if u := in.liveUnavailable(); u != "" {
 		return &Core{Unavailable: u}
 	}
-	if u := statsUnavailable(in); u != "" {
-		return &Core{Unavailable: u}
-	}
-	x := in.Latest.Stats
+	x := in.Latest.Val.Stats
 	c := &Core{
-		SampledAgoS: new(ageS(in.Now, in.Latest.Created.Time)),
+		SampledAgoS: new(ageS(in.Now, in.Latest.Val.Created.Time)),
 		CPUPct:      round(x.CPU, 1),
 		CPUCoresPct: x.CPUCores,
 		LoadAvg:     loadAvg(x.LoadAvg),
@@ -282,12 +293,15 @@ func core(in DetailInput) *Core {
 // cpuParts names Beszel's CPU breakdown, in its order.
 var cpuParts = []string{"user", "system", "iowait", "steal", "idle", "irq", "softirq", "nice"}
 
-// statsUnavailable explains why there is no stats sample, or is "".
-func statsUnavailable(in DetailInput) string {
-	switch {
-	case in.StatsErr != nil:
-		return "could not read stats: " + in.StatsErr.Error()
-	case in.Latest == nil:
+// liveUnavailable explains why the sections read from the newest stats
+// sample have no data, or is "".
+func (in DetailInput) liveUnavailable() string {
+	switch u := in.unavailable(); {
+	case u != "":
+		return u
+	case in.Latest.Err != nil:
+		return "could not read stats: " + in.Latest.Err.Error()
+	case in.Latest.Val == nil:
 		return "the hub has no stats sample from the last 5 minutes"
 	default:
 		return ""
@@ -295,7 +309,8 @@ func statsUnavailable(in DetailInput) string {
 }
 
 // unavailable explains why live data is missing, or is "" for an up system.
-func (in FleetInput) unavailable(s hub.System) string {
+func (in DetailInput) unavailable() string {
+	s := in.System
 	if s.Status == hub.StatusUp {
 		return ""
 	}

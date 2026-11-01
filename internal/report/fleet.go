@@ -19,61 +19,77 @@ const (
 	maxNames            = 5 // names listed per grouped problem
 )
 
-// Problem codes, in the order problems are reported.
+// Code names a kind of problem. Rows list them in the order of these
+// constants: buildRow and structural add them in it.
+type Code string
+
+// The problem codes.
 const (
-	CodeStatusDown         = "status_down"
-	CodeStatusPaused       = "status_paused"
-	CodeStatusPending      = "status_pending"
-	CodeStale              = "stale"
-	CodeServiceFailed      = "service_failed"
-	CodeContainerUnhealthy = "container_unhealthy"
-	CodeContainerGone      = "container_gone"
-	CodeSmartFailed        = "smart_failed"
-	CodeSmartWarning       = "smart_warning"
-	CodePoolDegraded       = "pool_degraded"
-	CodeMonitorFailing     = "monitor_failing"
-	CodeCertExpired        = "cert_expired"
-	CodeCertExpiring       = "cert_expiring"
-	CodeSecurityUpdates    = "security_updates"
+	CodeStatusDown         Code = "status_down"
+	CodeStatusPaused       Code = "status_paused"
+	CodeStatusPending      Code = "status_pending"
+	CodeStale              Code = "stale"
+	CodeServiceFailed      Code = "service_failed"
+	CodeContainerUnhealthy Code = "container_unhealthy"
+	CodeContainerGone      Code = "container_gone"
+	CodeSmartFailed        Code = "smart_failed"
+	CodeSmartWarning       Code = "smart_warning"
+	CodePoolDegraded       Code = "pool_degraded"
+	CodeMonitorFailing     Code = "monitor_failing"
+	CodeCertExpired        Code = "cert_expired"
+	CodeCertExpiring       Code = "cert_expiring"
+	CodeSecurityUpdates    Code = "security_updates"
 )
 
-var codeOrder = []string{
-	CodeStatusDown, CodeStatusPaused, CodeStatusPending, CodeStale, CodeServiceFailed,
-	CodeContainerUnhealthy, CodeContainerGone, CodeSmartFailed, CodeSmartWarning, CodePoolDegraded,
-	CodeMonitorFailing, CodeCertExpired, CodeCertExpiring, CodeSecurityUpdates,
+// section names the system_detail section that explains c.
+func (c Code) section() Section {
+	switch c {
+	case CodeStatusDown, CodeStatusPaused, CodeStatusPending, CodeStale:
+		return SectionSummary
+	case CodeServiceFailed:
+		return SectionServices
+	case CodeContainerUnhealthy, CodeContainerGone:
+		return SectionContainers
+	case CodeSmartFailed, CodeSmartWarning, CodePoolDegraded:
+		return SectionDisk
+	case CodeMonitorFailing, CodeCertExpired, CodeCertExpiring:
+		return SectionNetwork
+	case CodeSecurityUpdates:
+		return SectionUpdates
+	}
+	panic("section: unhandled problem code " + string(c)) // codes are the constants above
 }
 
-// codeSection names the system_detail section that explains each code.
-var codeSection = map[string]string{
-	CodeStatusDown: "summary", CodeStatusPaused: "summary", CodeStatusPending: "summary", CodeStale: "summary",
-	CodeServiceFailed: "services", CodeContainerUnhealthy: "containers", CodeContainerGone: "containers",
-	CodeSmartFailed: "disk", CodeSmartWarning: "disk", CodePoolDegraded: "disk",
-	CodeMonitorFailing: "network", CodeCertExpired: "network", CodeCertExpiring: "network",
-	CodeSecurityUpdates: "updates",
+// Read is one hub read: what it returned, or why it failed. The zero Read
+// is a read not made, and reads as empty.
+type Read[T any] struct {
+	Val T
+	Err error
 }
 
 // FleetInput is everything fleet_status reads, already fetched.
 type FleetInput struct {
-	Now              time.Time
-	HubVersion       string
-	TokenExpiresAt   time.Time
-	Systems          []hub.System
-	Services         []hub.Service
-	Containers       []hub.Container
-	RecentContainers []hub.ContainerStats // 10m rows from the last hour
-	Smart            []hub.SmartDevice
-	Pools            []hub.ZfsPool
-	Monitors         []hub.Monitor
-	// LastSeen is when each system that is not up last sent data: its
-	// newest stats row. Zero means none in Beszel's 30-day retention; a
-	// missing entry means unknown, and systems.updated stands in.
-	LastSeen map[string]time.Time
+	Now            time.Time
+	HubVersion     string
+	TokenExpiresAt time.Time
+	Systems        []hub.System // the systems to report
+	Services       Read[[]hub.Service]
+	Containers     Read[[]hub.Container]
+	Smart          Read[[]hub.SmartDevice]
+	Pools          Read[[]hub.ZfsPool]
+	Monitors       Read[[]hub.Monitor]
+	// RecentContainers is each up system's 10m container rows from the
+	// last hour, by system ID.
+	RecentContainers map[string]Read[[]hub.ContainerStats]
+	// LastSeen is when each system that is not up last sent data, by ID:
+	// its newest stats row. Zero means none in Beszel's 30-day retention; a
+	// missing entry or failed read means unknown, and systems.updated stands in.
+	LastSeen map[string]Read[time.Time]
 }
 
 // FleetOptions narrows the result.
 type FleetOptions struct {
-	Systems      []string // names or IDs; empty means all
-	ProblemsOnly bool     // drop rows without problems; counts still cover all
+	ProblemsOnly bool // drop rows without problems; counts still cover all
 }
 
 // FleetResult is the fleet_status output.
@@ -122,20 +138,16 @@ type Updates struct {
 
 // Problem is one kind of fault on a system.
 type Problem struct {
-	Code    string `json:"code"`
-	Detail  string `json:"detail"`
-	Section string `json:"section"`
-	Count   int    `json:"count,omitempty"`
+	Code    Code    `json:"code"`
+	Detail  string  `json:"detail"`
+	Section Section `json:"section"`
+	Count   int     `json:"count,omitempty"`
 }
 
 // Fleet builds the fleet_status result.
-func Fleet(in FleetInput, o FleetOptions) (FleetResult, error) {
-	systems, err := selectSystems(in.Systems, o.Systems)
-	if err != nil {
-		return FleetResult{}, err
-	}
+func Fleet(in FleetInput, o FleetOptions) FleetResult {
 	out := FleetResult{AsOf: in.Now.UTC().Truncate(time.Second), Warnings: TokenWarning(in.Now, in.TokenExpiresAt)}
-	for _, s := range systems {
+	for _, s := range in.Systems {
 		row := buildRow(in, s)
 		out.Counts.Total++
 		switch s.Status {
@@ -162,26 +174,34 @@ func Fleet(in FleetInput, o FleetOptions) (FleetResult, error) {
 	if out.Systems == nil {
 		out.Systems = []Row{}
 	}
-	return out, nil
+	var failed []string
+	failed = readFailed(failed, "systemd services", problemsMissing, in.Services.Err)
+	failed = readFailed(failed, "containers", problemsMissing, in.Containers.Err)
+	failed = readFailed(failed, "SMART devices", problemsMissing, in.Smart.Err)
+	failed = readFailed(failed, "storage pools", problemsMissing, in.Pools.Err)
+	failed = readFailed(failed, "network monitors", problemsMissing, in.Monitors.Err)
+	for _, s := range in.Systems {
+		failed = readFailed(failed, "container history of "+s.Name, problemsMissing, in.RecentContainers[s.ID].Err)
+		failed = lastSeenFailed(failed, in, s)
+	}
+	slices.Sort(failed)
+	out.Warnings = append(out.Warnings, failed...)
+	return out
 }
 
-func selectSystems(all []hub.System, refs []string) ([]hub.System, error) {
-	if len(refs) == 0 {
-		return all, nil
+const problemsMissing = "related problems may be missing"
+
+// readFailed appends the warning for a failed read: what was read, and what
+// the result therefore lacks.
+func readFailed(warnings []string, what, lacks string, err error) []string {
+	if err == nil {
+		return warnings
 	}
-	var out []hub.System
-	seen := map[string]bool{}
-	for _, ref := range refs {
-		s, err := Resolve(all, ref)
-		if err != nil {
-			return nil, err
-		}
-		if !seen[s.ID] {
-			seen[s.ID] = true
-			out = append(out, s)
-		}
-	}
-	return out, nil
+	return append(warnings, fmt.Sprintf("could not read %s, so %s: %v", what, lacks, err))
+}
+
+func lastSeenFailed(warnings []string, in FleetInput, s hub.System) []string {
+	return readFailed(warnings, "last data of "+s.Name, "its last-seen time is when its status last changed", in.LastSeen[s.ID].Err)
 }
 
 // TokenWarning returns the warning for a token that has expired or expires
@@ -228,20 +248,25 @@ func buildRow(in FleetInput, s hub.System) Row {
 	row.NetBytesPerS = new(i.BandwidthBytes)
 	row.UptimeS = new(i.Uptime)
 	row.Agent = i.AgentVersion
-	if len(i.PackageUpdates) > 0 {
-		row.Updates = &Updates{Total: int(i.PackageUpdates[0])}
-		if len(i.PackageUpdates) > 1 {
-			row.Updates.Security = new(int(i.PackageUpdates[1]))
-		}
-	}
+	row.Updates = packageCounts(i)
 
-	var p []Problem
 	if d := time.Duration(age) * time.Second; d > staleAfter {
-		p = append(p, problem(CodeStale, "last poll "+short(d)+" ago", 0))
+		row.Problems = append(row.Problems, problem(CodeStale, "last poll "+short(d)+" ago", 0))
 	}
-	p = append(p, structural(in, s)...)
-	row.Problems = sortProblems(p)
+	row.Problems = append(row.Problems, structural(in, s)...)
 	return row
+}
+
+// packageCounts reads the pending update counts on the systems row, or nil.
+func packageCounts(i hub.SystemInfo) *Updates {
+	if len(i.PackageUpdates) == 0 {
+		return nil
+	}
+	u := &Updates{Total: int(i.PackageUpdates[0])}
+	if len(i.PackageUpdates) > 1 {
+		u.Security = new(int(i.PackageUpdates[1]))
+	}
+	return u
 }
 
 // worstDisk is the fullest of the root disk and the extra filesystems.
@@ -259,11 +284,11 @@ func worstDisk(i hub.SystemInfo) (pct float64, name string) {
 // systems.updated is the fallback: Beszel bumps it on record rewrites, so it
 // can make a long-silent system look recently down.
 func (in FleetInput) lastSeen(s hub.System) (seen time.Time, none bool) {
-	t, ok := in.LastSeen[s.ID]
-	if !ok {
+	r, ok := in.LastSeen[s.ID]
+	if !ok || r.Err != nil {
 		return s.Updated.Time, false
 	}
-	return t, t.IsZero()
+	return r.Val, r.Val.IsZero()
 }
 
 func statusProblem(s hub.System, now, seen time.Time, none bool) []Problem {
@@ -286,69 +311,55 @@ func statusProblem(s hub.System, now, seen time.Time, none bool) []Problem {
 
 // structural finds the faults Beszel records without alert rules.
 func structural(in FleetInput, s hub.System) []Problem {
-	var failed, unhealthy, gone, smartFailed, smartWarn, pools, monitors, expired, expiring []string
+	items := map[Code][]string{} // what each problem names
+	add := func(code Code, item string) { items[code] = append(items[code], item) }
 
-	for _, svc := range in.Services {
-		if svc.System == s.ID && svc.State == 2 {
-			failed = append(failed, svc.Name)
+	for _, svc := range in.Services.Val {
+		if svc.System == s.ID && svc.State == hub.ServiceFailed {
+			add(CodeServiceFailed, svc.Name)
 		}
 	}
-
-	for _, c := range in.Containers {
-		if c.System == s.ID && c.Health == 3 && !containerStale(in.Now, c) {
-			unhealthy = append(unhealthy, c.Name)
+	for _, c := range in.Containers.Val {
+		if c.System == s.ID && c.Health == hub.HealthUnhealthy && !containerStale(in.Now, c) {
+			add(CodeContainerUnhealthy, c.Name)
 		}
 	}
-	gone = goneContainers(in, s.ID)
-
-	for _, d := range in.Smart {
-		if d.System != s.ID {
-			continue
-		}
-		switch smartProblem(d) {
-		case CodeSmartFailed:
-			smartFailed = append(smartFailed, deviceName(d))
-		case CodeSmartWarning:
-			smartWarn = append(smartWarn, deviceName(d))
+	items[CodeContainerGone] = goneContainers(in, s.ID)
+	for _, d := range in.Smart.Val {
+		if code := smartProblem(d); d.System == s.ID && code != "" {
+			add(code, deviceName(d))
 		}
 	}
-
-	for _, pl := range in.Pools {
-		if pl.System == s.ID && poolProblem(pl) != "" {
-			pools = append(pools, pl.Name+" "+pl.Health)
+	for _, pl := range in.Pools.Val {
+		if code := poolProblem(pl); pl.System == s.ID && code != "" {
+			add(code, pl.Name+" "+pl.Health)
 		}
 	}
-
-	for _, m := range in.Monitors {
+	for _, m := range in.Monitors.Val {
 		if m.System != s.ID {
 			continue
 		}
 		if monitorFailing(m) {
-			monitors = append(monitors, fmt.Sprintf("%s %.0f%% loss", m.Target, m.Loss1h))
+			add(CodeMonitorFailing, fmt.Sprintf("%s %.0f%% loss", m.Target, m.Loss1h))
 		}
-		switch code, left := certProblem(m, in.Now); code {
-		case CodeCertExpired:
-			expired = append(expired, m.Target+" "+short(-left)+" ago")
-		case CodeCertExpiring:
-			expiring = append(expiring, m.Target+" in "+short(left))
+		if code, left := certProblem(m, in.Now); code != "" {
+			when := "in " + short(left)
+			if left <= 0 {
+				when = short(-left) + " ago"
+			}
+			add(code, m.Target+" "+when)
 		}
 	}
 
 	var p []Problem
-	add := func(code string, items []string) {
-		if len(items) > 0 {
-			p = append(p, problem(code, list(items), len(items)))
+	for _, code := range []Code{
+		CodeServiceFailed, CodeContainerUnhealthy, CodeContainerGone, CodeSmartFailed, CodeSmartWarning,
+		CodePoolDegraded, CodeMonitorFailing, CodeCertExpired, CodeCertExpiring,
+	} {
+		if n := len(items[code]); n > 0 {
+			p = append(p, problem(code, list(items[code]), n))
 		}
 	}
-	add(CodeServiceFailed, failed)
-	add(CodeContainerUnhealthy, unhealthy)
-	add(CodeContainerGone, gone)
-	add(CodeSmartFailed, smartFailed)
-	add(CodeSmartWarning, smartWarn)
-	add(CodePoolDegraded, pools)
-	add(CodeMonitorFailing, monitors)
-	add(CodeCertExpired, expired)
-	add(CodeCertExpiring, expiring)
 	if pu := s.Info.PackageUpdates; len(pu) > 1 && pu[1] > 0 {
 		p = append(p, problem(CodeSecurityUpdates, strconv.Itoa(int(pu[1]))+" security updates pending", int(pu[1])))
 	}
@@ -356,7 +367,7 @@ func structural(in FleetInput, s hub.System) []Problem {
 }
 
 // smartProblem is the problem code for a drive's SMART state, or "".
-func smartProblem(d hub.SmartDevice) string {
+func smartProblem(d hub.SmartDevice) Code {
 	switch d.State {
 	case hub.SmartFailed:
 		return CodeSmartFailed
@@ -371,7 +382,7 @@ func smartProblem(d hub.SmartDevice) string {
 
 // poolProblem is the problem code for a pool's health, or "". An unknown
 // health is not a problem.
-func poolProblem(p hub.ZfsPool) string {
+func poolProblem(p hub.ZfsPool) Code {
 	if p.Health != "" && p.Health != "ONLINE" {
 		return CodePoolDegraded
 	}
@@ -385,7 +396,7 @@ func monitorFailing(m hub.Monitor) bool {
 
 // certProblem is the certificate problem of an enabled monitor, or "", with
 // the time left (negative once expired). Missing cert info is unknown, not fine.
-func certProblem(m hub.Monitor, now time.Time) (string, time.Duration) {
+func certProblem(m hub.Monitor, now time.Time) (Code, time.Duration) {
 	if !m.Enabled || m.CertInfo == nil || m.CertInfo.Expires <= 0 {
 		return "", 0
 	}
@@ -408,8 +419,8 @@ func deviceName(d hub.SmartDevice) string {
 	return d.Name
 }
 
-func problem(code, detail string, count int) Problem {
-	return Problem{Code: code, Detail: detail, Section: codeSection[code], Count: count}
+func problem(code Code, detail string, count int) Problem {
+	return Problem{Code: code, Detail: detail, Section: code.section(), Count: count}
 }
 
 // list joins sorted items, naming at most maxNames.
@@ -419,11 +430,4 @@ func list(items []string) string {
 		return strings.Join(items, ", ")
 	}
 	return strings.Join(items[:maxNames], ", ") + fmt.Sprintf(" +%d more", len(items)-maxNames)
-}
-
-func sortProblems(p []Problem) []Problem {
-	slices.SortStableFunc(p, func(a, b Problem) int {
-		return slices.Index(codeOrder, a.Code) - slices.Index(codeOrder, b.Code)
-	})
-	return p
 }

@@ -14,21 +14,23 @@ import (
 // Window is one metric_history time range, read from the stats type
 // Beszel's own charts use for it (site utils.ts).
 type Window struct {
-	Name     string
-	Type     hub.StatType
-	Span     time.Duration
-	Bucket   time.Duration
-	Expected int // buckets in a full window
+	Name   string
+	Type   hub.StatType
+	Span   time.Duration
+	Bucket time.Duration
 }
 
 // Windows lists the ranges metric_history accepts, shortest first.
 var Windows = []Window{
-	{"1h", hub.Stat1m, time.Hour, time.Minute, 60},
-	{"12h", hub.Stat10m, 12 * time.Hour, 10 * time.Minute, 72},
-	{"24h", hub.Stat20m, 24 * time.Hour, 20 * time.Minute, 72},
-	{"7d", hub.Stat120m, 7 * 24 * time.Hour, 2 * time.Hour, 84},
-	{"30d", hub.Stat480m, 30 * 24 * time.Hour, 8 * time.Hour, 90},
+	{"1h", hub.Stat1m, time.Hour, time.Minute},
+	{"12h", hub.Stat10m, 12 * time.Hour, 10 * time.Minute},
+	{"24h", hub.Stat20m, 24 * time.Hour, 20 * time.Minute},
+	{"7d", hub.Stat120m, 7 * 24 * time.Hour, 2 * time.Hour},
+	{"30d", hub.Stat480m, 30 * 24 * time.Hour, 8 * time.Hour},
 }
+
+// buckets is how many buckets a full window holds.
+func (w Window) buckets() int { return int(w.Span / w.Bucket) }
 
 // DefaultWindow is used when the caller names none.
 const DefaultWindow = "24h"
@@ -83,6 +85,19 @@ const (
 	SourceMonitors
 )
 
+// source is the collection metrics of kind k are read from.
+func (k MetricKind) source() Source {
+	switch k {
+	case MetricContainer:
+		return SourceContainers
+	case MetricMonitor:
+		return SourceMonitors
+	case MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDisk, MetricDiskIO, MetricNet, MetricLoad, MetricTemp, MetricGPU:
+		return SourceStats
+	}
+	panic("source: unhandled metric kind " + string(k)) // ParseMetrics admits only known kinds
+}
+
 // ParseMetrics checks the requested metrics and returns them with the
 // sources they need. It runs before any hub read.
 func ParseMetrics(raw []string) ([]Metric, []Source, error) {
@@ -112,14 +127,7 @@ func ParseMetrics(raw []string) ([]Metric, []Source, error) {
 			return nil, nil, fmt.Errorf("metric %q given twice", r)
 		}
 		out = append(out, Metric{Raw: r, Kind: kind, Target: target})
-		switch kind {
-		case MetricContainer:
-			need[SourceContainers] = true
-		case MetricMonitor:
-			need[SourceMonitors] = true
-		case MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDisk, MetricDiskIO, MetricNet, MetricLoad, MetricTemp, MetricGPU:
-			need[SourceStats] = true
-		}
+		need[kind.source()] = true
 	}
 	return out, slices.Sorted(maps.Keys(need)), nil
 }
@@ -136,22 +144,22 @@ func FindWindow(name string) (Window, error) {
 	return Windows[i], nil
 }
 
-// HistoryInput is everything metric_history reads, already fetched. Rows
-// are keyed by system ID and sorted oldest first.
+// HistoryInput is everything metric_history reads, already fetched.
 type HistoryInput struct {
 	Now            time.Time
 	TokenExpiresAt time.Time
-	Systems        []hub.System // the requested systems, in request order
 	Window         Window
-	Stats          map[string][]hub.SystemStats
-	Containers     map[string][]hub.ContainerStats
-	Monitors       []hub.Monitor
-	MonitorStats   map[string][]hub.MonitorStats
-	// Failed reads, by system ID; MonitorsErr is the monitor list itself.
-	StatsErrs        map[string]error
-	ContainerErrs    map[string]error
-	MonitorStatsErrs map[string]error
-	MonitorsErr      error
+	Systems        []SystemHistory // the requested systems, in request order
+	Monitors       Read[[]hub.Monitor]
+}
+
+// SystemHistory is one system's rows in the window, oldest first. Only the
+// sources the metrics need are read.
+type SystemHistory struct {
+	System       hub.System
+	Stats        Read[[]hub.SystemStats]
+	Containers   Read[[]hub.ContainerStats]
+	MonitorStats Read[[]hub.MonitorStats]
 }
 
 // HistoryOptions picks the metrics and the point count.
@@ -210,7 +218,7 @@ type line struct {
 	part, unit string
 	peaks      bool
 	samples    []bucket
-	rows       int      // buckets with data; monitors count failed probes too
+	rows       int      // overrides len(samples) as the buckets with data (monitors count failed probes too)
 	expected   int      // overrides the window's expected buckets (a monitor probing less often than the bucket)
 	avg        *float64 // overrides the mean of samples (monitor latency is weighted)
 	total      int64    // monitor probes, for loss
@@ -229,15 +237,15 @@ func History(in HistoryInput, o HistoryOptions) (HistoryResult, error) {
 		Series:   []SeriesItem{},
 	}
 	var samples [][]bucket
-	for _, s := range in.Systems {
+	for _, sh := range in.Systems {
 		for _, m := range o.Metrics {
-			lines, note, err := readLines(in, s, m)
+			lines, note, err := readLines(in, sh, m)
 			if err != nil {
 				return HistoryResult{}, err
 			}
 			for _, l := range lines {
 				item := summarise(in, l)
-				item.System, item.Metric = s.Name, m.Raw
+				item.System, item.Metric = sh.System.Name, m.Raw
 				if note != "" {
 					item.Note = note
 				}
@@ -287,29 +295,29 @@ func skeleton(m Metric) []line {
 
 // readLines fills a metric's lines for one system. note explains an empty
 // series; err is an unknown target, which lists the valid ones.
-func readLines(in HistoryInput, s hub.System, m Metric) (lines []line, note string, err error) {
+func readLines(in HistoryInput, sh SystemHistory, m Metric) (lines []line, note string, err error) {
 	lines = skeleton(m)
 	failed := func(err error) ([]line, string, error) {
 		return lines, "could not read history: " + err.Error(), nil
 	}
-	switch m.Kind {
-	case MetricContainer:
-		if err := in.ContainerErrs[s.ID]; err != nil {
+	switch m.Kind.source() {
+	case SourceContainers:
+		if err := sh.Containers.Err; err != nil {
 			return failed(err)
 		}
-		return containerLines(in.Containers[s.ID], s, m, lines)
-	case MetricMonitor:
-		if err := cmp.Or(in.MonitorsErr, in.MonitorStatsErrs[s.ID]); err != nil {
+		return containerLines(sh.Containers.Val, sh.System, m, lines)
+	case SourceMonitors:
+		if err := cmp.Or(in.Monitors.Err, sh.MonitorStats.Err); err != nil {
 			return failed(err)
 		}
-		return monitorLines(in, s, m, lines)
-	case MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDisk, MetricDiskIO, MetricNet, MetricLoad, MetricTemp, MetricGPU:
-		if err := in.StatsErrs[s.ID]; err != nil {
+		return monitorLines(in, sh, m, lines)
+	case SourceStats:
+		if err := sh.Stats.Err; err != nil {
 			return failed(err)
 		}
-		return statsLines(in.Stats[s.ID], s, m, lines)
+		return statsLines(sh.Stats.Val, sh.System, m, lines)
 	}
-	panic("readLines: unhandled metric kind " + string(m.Kind)) // ParseMetrics admits only known kinds
+	panic("readLines: unhandled source") // source covers every kind
 }
 
 // targetCheck validates m.Target against the names seen in the window. With
@@ -321,8 +329,7 @@ func targetCheck(s hub.System, m Metric, what string, rows int, valid map[string
 	case len(valid) == 0:
 		return "no " + what + " reported in this window", nil
 	default:
-		return "", fmt.Errorf("%s has no %s %q in this window; valid: %s", s.Name, what, m.Target,
-			strings.Join(slices.Sorted(maps.Keys(valid)), ", "))
+		return "", fmt.Errorf("%s has no %s %q in this window; valid: %s", s.Name, what, m.Target, keyList(valid))
 	}
 }
 
@@ -381,10 +388,7 @@ func statsLines(rows []hub.SystemStats, s hub.System, m Metric, lines []line) ([
 			}
 		}
 	}
-	for i := range lines {
-		lines[i].rows = len(lines[i].samples)
-	}
-	if m.Kind == MetricSwap && len(rows) > 0 && lines[0].rows == 0 {
+	if m.Kind == MetricSwap && len(rows) > 0 && len(lines[0].samples) == 0 {
 		return lines, "no swap on this server", nil
 	}
 	return lines, "", nil
@@ -475,17 +479,17 @@ func containerLines(rows []hub.ContainerStats, s hub.System, m Metric, lines []l
 		lines[0].samples = append(lines[0].samples, bucket{at: r.Created.Time, v: c.CPU})
 		lines[1].samples = append(lines[1].samples, bucket{at: r.Created.Time, v: c.MemMiB * mib})
 	}
-	lines[0].rows, lines[1].rows = len(lines[0].samples), len(lines[1].samples)
-	if n := lines[0].rows; n > 0 && n < len(rows) {
+	if n := len(lines[0].samples); n > 0 && n < len(rows) {
 		return lines, "the container was missing from some buckets; Beszel counts its missing minutes as 0, so buckets around a start or stop read low", nil
 	}
 	return lines, "", nil
 }
 
-func monitorLines(in HistoryInput, s hub.System, m Metric, lines []line) ([]line, string, error) {
+func monitorLines(in HistoryInput, sh SystemHistory, m Metric, lines []line) ([]line, string, error) {
+	s := sh.System
 	valid, ids := map[string]bool{}, map[string]bool{}
 	l := &lines[0]
-	for _, mon := range in.Monitors {
+	for _, mon := range in.Monitors.Val {
 		if mon.System == s.ID {
 			valid[mon.Target] = true
 			if mon.Target == m.Target {
@@ -501,10 +505,10 @@ func monitorLines(in HistoryInput, s hub.System, m Metric, lines []line) ([]line
 		return lines, "no network monitors configured for this server", nil
 	}
 	if !valid[m.Target] {
-		return nil, "", fmt.Errorf("%s has no network monitor %q; valid: %s", s.Name, m.Target, strings.Join(slices.Sorted(maps.Keys(valid)), ", "))
+		return nil, "", fmt.Errorf("%s has no network monitor %q; valid: %s", s.Name, m.Target, keyList(valid))
 	}
 	var resSum float64
-	for _, r := range in.MonitorStats[s.ID] {
+	for _, r := range sh.MonitorStats.Val {
 		if !ids[r.Monitor] || r.Total <= 0 {
 			continue
 		}
@@ -526,25 +530,34 @@ func monitorLines(in HistoryInput, s hub.System, m Metric, lines []line) ([]line
 }
 
 func summarise(in HistoryInput, l line) SeriesItem {
-	item := SeriesItem{Part: l.part, Unit: l.unit, Buckets: l.rows, ExpectedBuckets: cmp.Or(l.expected, in.Window.Expected)}
-	item.CoveragePct = roundTo(min(100, float64(l.rows)/float64(item.ExpectedBuckets)*100), 0)
+	rows := cmp.Or(l.rows, len(l.samples))
+	item := SeriesItem{Part: l.part, Unit: l.unit, Buckets: rows, ExpectedBuckets: cmp.Or(l.expected, in.Window.buckets())}
+	item.CoveragePct = roundTo(min(100, float64(rows)/float64(item.ExpectedBuckets)*100), 0)
 	if l.total > 0 {
 		item.LossPct = round((1-float64(l.success)/float64(l.total))*100, 2)
 	}
 	if len(l.samples) == 0 {
-		if l.rows == 0 {
+		if rows == 0 {
 			item.Note = "no samples in this window"
 		}
 		return item
 	}
+	// The high point is the true maximum when the line has peaks. Ties keep
+	// the earlier bucket.
+	top := func(b bucket) float64 {
+		if l.peaks {
+			return b.hi
+		}
+		return b.v
+	}
 	lo, high, sum := l.samples[0], l.samples[0], 0.0
 	for _, x := range l.samples {
 		sum += x.v
-		lo = minBy(lo, x, func(s bucket) float64 { return s.v })
-		if l.peaks {
-			high = maxBy(high, x, func(s bucket) float64 { return s.hi })
-		} else {
-			high = maxBy(high, x, func(s bucket) float64 { return s.v })
+		if x.v < lo.v {
+			lo = x
+		}
+		if top(x) > top(high) {
+			high = x
 		}
 	}
 	avg := sum / float64(len(l.samples))
@@ -563,19 +576,9 @@ func summarise(in HistoryInput, l line) SeriesItem {
 	return item
 }
 
-// minBy and maxBy keep the earlier bucket on ties.
-func minBy(a, b bucket, f func(bucket) float64) bucket {
-	if f(b) < f(a) {
-		return b
-	}
-	return a
-}
-
-func maxBy(a, b bucket, f func(bucket) float64) bucket {
-	if f(b) > f(a) {
-		return b
-	}
-	return a
+// keyList lists the names in valid, sorted, for an error message.
+func keyList(valid map[string]bool) string {
+	return strings.Join(slices.Sorted(maps.Keys(valid)), ", ")
 }
 
 // downsample returns at most n points, averaging consecutive buckets.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
+	"github.com/agrmohit/beszelscope/internal/hub/hubtest"
 )
 
 func TestDetailGolden(t *testing.T) {
@@ -17,15 +18,15 @@ func TestDetailGolden(t *testing.T) {
 		Now:            captured,
 		HubVersion:     "0.21.1",
 		TokenExpiresAt: captured.Add(10 * 365 * 24 * time.Hour),
-		Systems:        load[hub.System](t, "hub/systems.json"),
-		Services:       load[hub.Service](t, "hub/systemd_services.json"),
-		Containers:     load[hub.Container](t, "hub/containers.json"),
-		Smart:          load[hub.SmartDevice](t, "hub/smart_devices.json"),
-		Pools:          load[hub.ZfsPool](t, "handmade/zfs_pools.json"),
-		Monitors:       load[hub.Monitor](t, "hub/network_monitors.json"),
+		Systems:        hubtest.Load[hub.System](t, "hub/systems.json"),
+		Services:       ok(hubtest.Load[hub.Service](t, "hub/systemd_services.json")),
+		Containers:     ok(hubtest.Load[hub.Container](t, "hub/containers.json")),
+		Smart:          ok(hubtest.Load[hub.SmartDevice](t, "hub/smart_devices.json")),
+		Pools:          ok(hubtest.Load[hub.ZfsPool](t, "handmade/zfs_pools.json")),
+		Monitors:       ok(hubtest.Load[hub.Monitor](t, "hub/network_monitors.json")),
 	}
 	fleet.LastSeen = fixtureLastSeen(t, fleet.Systems)
-	details := load[hub.SystemDetails](t, "hub/system_details.json")
+	details := hubtest.Load[hub.SystemDetails](t, "hub/system_details.json")
 	input := func(name string) DetailInput {
 		in := DetailInput{FleetInput: fleet}
 		for _, s := range fleet.Systems {
@@ -35,11 +36,11 @@ func TestDetailGolden(t *testing.T) {
 		}
 		for i := range details {
 			if details[i].System == in.System.ID {
-				in.Details = &details[i]
+				in.Details = ok(&details[i])
 			}
 		}
-		if rows := load[hub.SystemStats](t, "hub/system_stats_latest_"+name+".json"); len(rows) > 0 {
-			in.Latest = &rows[0]
+		if rows := hubtest.Load[hub.SystemStats](t, "hub/system_stats_latest_"+name+".json"); len(rows) > 0 {
+			in.Latest = ok(&rows[0])
 		}
 		return in
 	}
@@ -148,7 +149,7 @@ func TestDetailEnvelope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := DetailInput{FleetInput: FleetInput{Now: now, HubVersion: tt.hub, TokenExpiresAt: tt.expires}, System: tt.sys, Latest: sample}
+			in := DetailInput{FleetInput: FleetInput{Now: now, HubVersion: tt.hub, TokenExpiresAt: tt.expires}, System: tt.sys, Latest: ok(sample)}
 			r, err := Detail(in, DetailOptions{Sections: tt.sections, Sort: tt.sort, Limit: tt.limit})
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
@@ -227,7 +228,7 @@ func TestDetailSummary(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := DetailInput{FleetInput: FleetInput{Now: now, Services: tt.services}, System: tt.sys, Details: tt.details}
+			in := DetailInput{FleetInput: FleetInput{Now: now, Services: ok(tt.services)}, System: tt.sys, Details: ok(tt.details)}
 			r, err := Detail(in, DetailOptions{})
 			if err != nil {
 				t.Fatal(err)
@@ -289,7 +290,7 @@ func TestDetailCore(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
+			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Latest: Read[*hub.SystemStats]{Val: tt.latest, Err: tt.statsErr}}
 			r, err := Detail(in, DetailOptions{Sections: []Section{SectionCore}})
 			if err != nil {
 				t.Fatal(err)

@@ -2,12 +2,9 @@ package mcptools
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"slices"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
@@ -50,23 +47,11 @@ type detailIn struct {
 const latestWithin = 5 * time.Minute
 
 func addDetail(s *mcp.Server, t *tools) {
-	in, err := jsonschema.For[detailIn](nil)
-	if err != nil {
-		panic(fmt.Sprintf("system_detail input schema: %v", err)) // fixed type; fails only on a code bug
-	}
+	in := inputSchema[detailIn]("system_detail")
 	sections := in.Properties["sections"]
-	sections.Items.Enum = make([]any, len(report.Sections))
-	for i, name := range report.Sections {
-		sections.Items.Enum[i] = string(name) // validation compares the decoded JSON, a string
-	}
-	sections.Types, sections.Type = nil, "array" // not ["null","array"]
-	sections.UniqueItems = true
-	sections.MaxItems = new(len(report.Sections))
-	sort := in.Properties["sort"]
-	sort.Enum = make([]any, len(report.Sorts))
-	for i, name := range report.Sorts {
-		sort.Enum[i] = string(name)
-	}
+	array(sections, 0, len(report.Sections))
+	sections.Items.Enum = enum(report.Sections)
+	in.Properties["sort"].Enum = enum(report.Sorts)
 	limit := in.Properties["limit"]
 	limit.Minimum, limit.Maximum = new(1.0), new(float64(report.MaxLimit))
 	mcp.AddTool(s, &mcp.Tool{
@@ -83,102 +68,75 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	if ask != nil || err != nil {
 		return ask, report.DetailResult{}, err
 	}
-	ids, ask, err := resolveAll(req, systems, []string{in.System})
+	picked, ask, err := resolveAll(req, systems, []string{in.System})
 	if ask != nil || err != nil {
 		return ask, report.DetailResult{}, err
 	}
-	sys := systems[slices.IndexFunc(systems, func(s hub.System) bool { return s.ID == ids[0] })]
+	sys := picked[0]
 
 	input := report.DetailInput{
 		FleetInput: report.FleetInput{
-			Now: now, HubVersion: t.d.HubVersion, TokenExpiresAt: t.d.TokenExpiresAt, Systems: systems,
-			LastSeen: map[string]time.Time{},
+			Now: now, HubVersion: t.d.HubVersion, TokenExpiresAt: t.d.TokenExpiresAt,
+			RecentContainers: map[string]report.Read[[]hub.ContainerStats]{}, LastSeen: map[string]report.Read[time.Time]{},
 		},
 		System: sys,
 	}
 	want := func(section report.Section) bool {
 		return len(in.Sections) == 0 && section == report.SectionSummary || slices.Contains(in.Sections, section)
 	}
-	// A list section reports its own failed read; only the summary's
-	// problems need a warning.
-	summaryErr := func(err error) error {
-		if want(report.SectionSummary) {
-			return err
-		}
-		return nil
-	}
 	// Each source is read once, and only for the sections that use it.
 	var fe fetcher
 	up := sys.Status == hub.StatusUp
 	if !up {
-		t.lastSeen(ctx, &fe, sys, &input.FleetInput)
+		t.readLastSeen(ctx, &fe, &input.FleetInput, sys)
 	}
 	if want(report.SectionSummary) || want(report.SectionUpdates) && up {
-		fe.run("system details", "the summary lacks OS and CPU facts", func() error {
+		read(ctx, &fe, &input.Details, func(ctx context.Context) (*hub.SystemDetails, error) {
 			all, err := t.d.Hub.SystemDetails(ctx)
-			for i := range all {
-				if all[i].System == sys.ID {
-					input.Details = &all[i]
-				}
+			if i := slices.IndexFunc(all, func(d hub.SystemDetails) bool { return d.System == sys.ID }); i >= 0 {
+				return &all[i], err
 			}
-			return err
+			return nil, err
 		})
 	}
 	if want(report.SectionSummary) || want(report.SectionServices) && up {
-		fe.run("systemd services", "related problems may be missing", func() (err error) {
-			input.Services, err = t.d.Hub.Services(ctx)
-			input.ServicesErr = err
-			return summaryErr(err)
-		})
+		read(ctx, &fe, &input.Services, t.d.Hub.Services)
 	}
 	if want(report.SectionSummary) || want(report.SectionContainers) && up {
-		fe.run("containers", "related problems may be missing", func() (err error) {
-			input.Containers, err = t.d.Hub.Containers(ctx)
-			input.ContainersErr = err
-			return summaryErr(err)
-		})
+		read(ctx, &fe, &input.Containers, t.d.Hub.Containers)
 		if up {
-			fe.run("container history", "stopped containers may be missing", func() (err error) {
-				input.RecentContainers, err = t.d.Hub.ContainerStats(ctx, sys.ID, hub.Stat10m, now.Add(-time.Hour))
-				return err
+			readKey(ctx, &fe, input.RecentContainers, sys.ID, func(ctx context.Context) ([]hub.ContainerStats, error) {
+				return t.d.Hub.ContainerStats(ctx, sys.ID, hub.Stat10m, now.Add(-time.Hour))
 			})
 		}
 	}
-	const lacks = "its rows and related problems may be missing"
 	if want(report.SectionSummary) || want(report.SectionNetwork) {
-		fe.run("network monitors", lacks, func() (err error) { input.Monitors, err = t.d.Hub.Monitors(ctx); return err })
+		read(ctx, &fe, &input.Monitors, t.d.Hub.Monitors)
 	}
 	if want(report.SectionSummary) || want(report.SectionDisk) {
-		fe.run("SMART devices", lacks, func() (err error) { input.Smart, err = t.d.Hub.SmartDevices(ctx); return err })
-		fe.run("storage pools", lacks, func() (err error) { input.Pools, err = t.d.Hub.ZfsPools(ctx); return err })
+		read(ctx, &fe, &input.Smart, t.d.Hub.SmartDevices)
+		read(ctx, &fe, &input.Pools, t.d.Hub.ZfsPools)
 	}
 	if (want(report.SectionCore) || want(report.SectionNetwork) || want(report.SectionDisk) || want(report.SectionGPU)) && up {
-		fe.run("stats", "the stats sections are missing", func() error {
+		read(ctx, &fe, &input.Latest, func(ctx context.Context) (*hub.SystemStats, error) {
 			rows, err := t.d.Hub.SystemStats(ctx, sys.ID, hub.Stat1m, now.Add(-latestWithin))
-			if err != nil {
-				input.StatsErr = err
-				return nil // the sections report it themselves
+			if err != nil || len(rows) == 0 {
+				return nil, err
 			}
-			for i := range rows {
-				if input.Latest == nil || rows[i].Created.After(input.Latest.Created.Time) {
-					input.Latest = &rows[i]
-				}
-			}
-			return nil
+			newest := slices.MaxFunc(rows, func(a, b hub.SystemStats) int { return a.Created.Compare(b.Created.Time) })
+			return &newest, nil
 		})
 	}
 	if want(report.SectionUpdates) && up {
-		fe.run("package updates", "", func() error {
+		read(ctx, &fe, &input.Packages, func(ctx context.Context) (*hub.PackageUpdates, error) {
 			p, err := t.d.Hub.PackageUpdates(ctx, sys.ID)
 			if err != nil {
-				input.PackagesErr = err
-				return nil // the updates section reports it
+				return nil, err
 			}
-			input.Packages = &p
-			return nil
+			return &p, nil
 		})
 	}
-	warnings := fe.wait()
+	fe.wait()
 
 	res, err := report.Detail(input, report.DetailOptions{
 		Sections: in.Sections, Filter: in.Filter, ProblemsOnly: in.ProblemsOnly, Sort: in.Sort, Limit: in.Limit,
@@ -186,21 +144,5 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	if err != nil {
 		return nil, report.DetailResult{}, err
 	}
-	res.Warnings = append(res.Warnings, warnings...)
 	return nil, res, nil
-}
-
-// systems lists every system. A rejected token offers renewal once, when
-// the client can open a URL.
-func (t *tools) systems(ctx context.Context, req *mcp.CallToolRequest) ([]hub.System, *mcp.CallToolResult, error) {
-	systems, err := t.d.Hub.Systems(ctx)
-	if err == nil {
-		return systems, nil, nil
-	}
-	if errors.Is(err, hub.ErrUnauthorized) {
-		if ask := t.renewalRequest(req); ask != nil {
-			return nil, ask, nil
-		}
-	}
-	return nil, nil, hubError(err)
 }

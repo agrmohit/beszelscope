@@ -1,24 +1,22 @@
 package mcptools
 
 import (
-	"fmt"
+	"context"
 	"runtime/debug"
-	"slices"
 	"sync"
+
+	"github.com/agrmohit/beszelscope/internal/report"
 )
 
-// fetcher runs hub reads in parallel and collects their failures as
-// warnings, so one failed read leaves a partial result instead of none.
+// fetcher runs hub reads in parallel. Each read stores its own result, so
+// one failed read leaves a partial result instead of none.
 type fetcher struct {
-	mu       sync.Mutex
-	wg       sync.WaitGroup
-	warnings []string
-	crashed  *goroutinePanic
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	crashed *goroutinePanic
 }
 
-// run starts f. If f fails, the warning names what was read and what the
-// result therefore lacks.
-func (fe *fetcher) run(what, lacks string, f func() error) {
+func (fe *fetcher) run(f func()) {
 	fe.wg.Go(func() {
 		// instrument recovers only the handler goroutine, so a panic here
 		// is carried back and re-raised there.
@@ -29,28 +27,33 @@ func (fe *fetcher) run(what, lacks string, f func() error) {
 				fe.mu.Unlock()
 			}
 		}()
-		if err := f(); err != nil {
-			fe.mu.Lock()
-			fe.warnings = append(fe.warnings, fmt.Sprintf("could not read %s, so %s: %v", what, lacks, err))
-			fe.mu.Unlock()
-		}
+		f()
 	})
 }
 
-// locked runs f while holding the fetcher's lock, for appends from reads.
-func (fe *fetcher) locked(f func()) {
-	fe.mu.Lock()
-	defer fe.mu.Unlock()
-	f()
-}
-
-// wait blocks until every read is done and returns the warnings, sorted.
-// It re-raises a panic from any read.
-func (fe *fetcher) wait() []string {
+// wait blocks until every read is done. It re-raises a panic from any read.
+func (fe *fetcher) wait() {
 	fe.wg.Wait()
 	if fe.crashed != nil {
 		panic(fe.crashed)
 	}
-	slices.Sort(fe.warnings)
-	return fe.warnings
+}
+
+// read starts f and stores its result in dst.
+func read[T any](ctx context.Context, fe *fetcher, dst *report.Read[T], f func(context.Context) (T, error)) {
+	fe.run(func() {
+		v, err := f(ctx)
+		*dst = report.Read[T]{Val: v, Err: err}
+	})
+}
+
+// readKey starts f and stores its result in m under key. Reads share m, so
+// the store takes the fetcher's lock.
+func readKey[T any](ctx context.Context, fe *fetcher, m map[string]report.Read[T], key string, f func(context.Context) (T, error)) {
+	fe.run(func() {
+		v, err := f(ctx)
+		fe.mu.Lock()
+		defer fe.mu.Unlock()
+		m[key] = report.Read[T]{Val: v, Err: err}
+	})
 }

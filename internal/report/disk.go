@@ -44,7 +44,7 @@ type PoolRow struct {
 	Scrub       *Scrub    `json:"scrub,omitempty"`
 	BadVdevs    []VdevRow `json:"bad_vdevs,omitempty"` // only devices with errors or not ONLINE
 	CheckedAgoS *int64    `json:"checked_ago_s,omitempty"`
-	Problems    []string  `json:"problems,omitempty"`
+	Problems    []Code    `json:"problems,omitempty"`
 }
 
 // Scrub is a pool's last scrub.
@@ -74,7 +74,7 @@ type SmartRow struct {
 	PowerCycles       uint64         `json:"power_cycles,omitempty"`
 	FailingAttributes []FailingAttr  `json:"failing_attributes,omitempty"`
 	CheckedAgoS       *int64         `json:"checked_ago_s,omitempty"`
-	Problems          []string       `json:"problems,omitempty"`
+	Problems          []Code         `json:"problems,omitempty"`
 }
 
 // FailingAttr is a SMART attribute that has failed.
@@ -85,15 +85,10 @@ type FailingAttr struct {
 }
 
 func disk(in DetailInput) *Disk {
-	d := &Disk{}
-	switch {
-	case in.unavailable(in.System) != "":
-		d.Unavailable = in.unavailable(in.System)
-	case statsUnavailable(in) != "":
-		d.Unavailable = statsUnavailable(in)
-	default:
-		x := in.Latest.Stats
-		d.SampledAgoS = new(ageS(in.Now, in.Latest.Created.Time))
+	d := &Disk{Unavailable: in.liveUnavailable()}
+	if d.Unavailable == "" {
+		x := in.Latest.Val.Stats
+		d.SampledAgoS = new(ageS(in.Now, in.Latest.Val.Created.Time))
 		root := Filesystem{
 			Name: "/", TotalGiB: round(x.DiskGB, 2), UsedGiB: round(x.DiskUsedGB, 2), Pct: round(x.DiskPct, 1),
 			ReadBytesPerS: x.DiskIO[0], WriteBytesPerS: x.DiskIO[1], IOUtilPct: ioUtil(x.DiskIOStats),
@@ -112,13 +107,13 @@ func disk(in DetailInput) *Disk {
 		}
 	}
 
-	for _, p := range in.Pools {
+	for _, p := range in.Pools.Val {
 		if p.System == in.System.ID {
 			d.Pools = append(d.Pools, poolRow(in, p))
 		}
 	}
 	slices.SortStableFunc(d.Pools, func(a, b PoolRow) int { return problemsFirst(len(a.Problems), len(b.Problems), a.Name, b.Name) })
-	for _, s := range in.Smart {
+	for _, s := range in.Smart.Val {
 		if s.System == in.System.ID {
 			d.Smart = append(d.Smart, smartRow(in, s))
 		}
@@ -166,7 +161,7 @@ func poolRow(in DetailInput, p hub.ZfsPool) PoolRow {
 		row.CheckedAgoS = new(ageS(in.Now, p.Updated.Time))
 	}
 	if code := poolProblem(p); code != "" {
-		row.Problems = []string{code}
+		row.Problems = []Code{code}
 	}
 	return row
 }
@@ -188,7 +183,7 @@ func smartRow(in DetailInput, s hub.SmartDevice) SmartRow {
 		row.CheckedAgoS = new(ageS(in.Now, s.Updated.Time))
 	}
 	if code := smartProblem(s); code != "" {
-		row.Problems = []string{code}
+		row.Problems = []Code{code}
 	}
 	return row
 }

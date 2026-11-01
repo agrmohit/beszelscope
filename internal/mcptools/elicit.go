@@ -3,10 +3,12 @@ package mcptools
 import (
 	"crypto/rand"
 	"fmt"
+	"slices"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/agrmohit/beszelscope/internal/hub"
 	"github.com/agrmohit/beszelscope/internal/report"
 )
 
@@ -37,19 +39,12 @@ func answer(req *mcp.CallToolRequest, id string) (*mcp.ElicitResult, bool) {
 
 func pickID(ref string) string { return "pick_system:" + ref }
 
-func pickLabels(amb *report.AmbiguousError) (labels []any, byLabel map[string]string) {
-	byLabel = map[string]string{}
-	for _, s := range amb.Matches {
-		label := s.Name + " (" + s.ID + ")"
-		byLabel[label] = s.ID
-		labels = append(labels, label)
-	}
-	return labels, byLabel
-}
-
 // pickRequest asks which system an ambiguous name meant.
 func pickRequest(amb *report.AmbiguousError) *mcp.ElicitParams {
-	labels, _ := pickLabels(amb)
+	labels := make([]any, len(amb.Matches))
+	for i, s := range amb.Matches {
+		labels[i] = report.Label(s)
+	}
 	return &mcp.ElicitParams{
 		Mode:    "form",
 		Message: fmt.Sprintf("%q matches several systems. Which one did you mean?", amb.Ref),
@@ -61,18 +56,21 @@ func pickRequest(amb *report.AmbiguousError) *mcp.ElicitParams {
 	}
 }
 
-// pickedID returns the system the user chose for amb, if they answered.
-func pickedID(req *mcp.CallToolRequest, amb *report.AmbiguousError) (id string, answered bool) {
+// chosen returns the system the user chose for amb, if they answered; nil
+// when they declined or named none of the matches.
+func chosen(req *mcp.CallToolRequest, amb *report.AmbiguousError) (s *hub.System, answered bool) {
 	r, ok := answer(req, pickID(amb.Ref))
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	if r.Action != "accept" {
-		return "", true
+		return nil, true
 	}
 	label, _ := r.Content["system"].(string)
-	_, byLabel := pickLabels(amb)
-	return byLabel[label], true
+	if i := slices.IndexFunc(amb.Matches, func(s hub.System) bool { return report.Label(s) == label }); i >= 0 {
+		return &amb.Matches[i], true
+	}
+	return nil, true
 }
 
 // renewalRequest offers, once per process, to open the hub's user admin so

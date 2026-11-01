@@ -88,7 +88,7 @@ func TestDetailNetwork(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := DetailInput{FleetInput: FleetInput{Now: now, Monitors: tt.monitors}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
+			in := DetailInput{FleetInput: FleetInput{Now: now, Monitors: ok(tt.monitors)}, System: tt.sys, Latest: Read[*hub.SystemStats]{Val: tt.latest, Err: tt.statsErr}}
 			r, err := Detail(in, DetailOptions{Sections: []Section{SectionNetwork}})
 			if err != nil {
 				t.Fatal(err)
@@ -176,7 +176,7 @@ func TestDetailDisk(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := DetailInput{FleetInput: FleetInput{Now: now, Pools: tt.pools, Smart: tt.smart}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
+			in := DetailInput{FleetInput: FleetInput{Now: now, Pools: ok(tt.pools), Smart: ok(tt.smart)}, System: tt.sys, Latest: Read[*hub.SystemStats]{Val: tt.latest, Err: tt.statsErr}}
 			r, err := Detail(in, DetailOptions{Sections: []Section{SectionDisk}})
 			if err != nil {
 				t.Fatal(err)
@@ -237,7 +237,7 @@ func TestDetailGPU(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
+			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Latest: Read[*hub.SystemStats]{Val: tt.latest, Err: tt.statsErr}}
 			r, err := Detail(in, DetailOptions{Sections: []Section{SectionGPU}})
 			if err != nil {
 				t.Fatal(err)
@@ -285,7 +285,7 @@ func TestDetailContainers(t *testing.T) {
 		name       string
 		sys        hub.System
 		containers []hub.Container
-		recent     []hub.ContainerStats
+		recent     map[string]Read[[]hub.ContainerStats]
 		readErr    error
 		opts       DetailOptions
 		want       string
@@ -378,10 +378,12 @@ func TestDetailContainers(t *testing.T) {
 				ctr("elsewhere", 1, 1, func(c *hub.Container) { c.System = "otherotherother"; c.Updated = 0 }),
 				ctr("backup", 1, 1, func(c *hub.Container) { c.System = "otherotherother" }), // live elsewhere, gone here
 			},
-			recent: []hub.ContainerStats{
-				{System: up.ID, Stats: []hub.ContainerStat{{Name: "a"}, {Name: "cron"}, {Name: "backup"}}},
-				{System: up.ID, Stats: []hub.ContainerStat{{Name: "cron"}}},
-				{System: "otherotherother", Stats: []hub.ContainerStat{{Name: "ghost"}}},
+			recent: map[string]Read[[]hub.ContainerStats]{
+				up.ID: ok([]hub.ContainerStats{
+					{System: up.ID, Stats: []hub.ContainerStat{{Name: "a"}, {Name: "cron"}, {Name: "backup"}}},
+					{System: up.ID, Stats: []hub.ContainerStat{{Name: "cron"}}},
+				}),
+				"otherotherother": ok([]hub.ContainerStats{{System: "otherotherother", Stats: []hub.ContainerStat{{Name: "ghost"}}}}),
 			},
 			want: `{"hints":null,"section":{"counts":{"total":2,"shown":2,"truncated":false},"unhealthy":0,"rows":[` +
 				`{"name":"edge","image":"edge:1","status":"Up 2 hours","health":"healthy","cpu_pct":1,"mem_bytes":1048576,"net_bytes_per_s":1500,"age_s":180},` +
@@ -416,8 +418,8 @@ func TestDetailContainers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := DetailInput{
-				FleetInput: FleetInput{Now: now, Containers: tt.containers, RecentContainers: tt.recent},
-				System:     tt.sys, ContainersErr: tt.readErr,
+				FleetInput: FleetInput{Now: now, Containers: Read[[]hub.Container]{Val: tt.containers, Err: tt.readErr}, RecentContainers: tt.recent},
+				System:     tt.sys,
 			}
 			tt.opts.Sections = []Section{SectionContainers}
 			r, err := Detail(in, tt.opts)
@@ -433,7 +435,7 @@ func TestDetailContainers(t *testing.T) {
 
 func TestDetailServices(t *testing.T) {
 	up := upSystem()
-	svc := func(name string, state, sub int, cpu float64, mem uint64) hub.Service {
+	svc := func(name string, state hub.ServiceState, sub hub.ServiceSub, cpu float64, mem uint64) hub.Service {
 		return hub.Service{System: up.ID, Name: name, State: state, Sub: sub, CPU: cpu, Memory: mem, MemPeak: 2 * mem}
 	}
 	units := []hub.Service{
@@ -496,7 +498,7 @@ func TestDetailServices(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := DetailInput{FleetInput: FleetInput{Now: now, Services: tt.services}, System: tt.sys, ServicesErr: tt.readErr}
+			in := DetailInput{FleetInput: FleetInput{Now: now, Services: Read[[]hub.Service]{Val: tt.services, Err: tt.readErr}}, System: tt.sys}
 			tt.opts.Sections = []Section{SectionServices}
 			r, err := Detail(in, tt.opts)
 			if err != nil {
@@ -513,11 +515,11 @@ func TestDetailServices(t *testing.T) {
 func TestDetailHints(t *testing.T) {
 	up := upSystem()
 	in := DetailInput{
-		FleetInput: FleetInput{Now: now, Services: []hub.Service{{System: up.ID, Name: "a"}, {System: up.ID, Name: "b"}}},
+		FleetInput: FleetInput{Now: now, Services: ok([]hub.Service{{System: up.ID, Name: "a"}, {System: up.ID, Name: "b"}})},
 		System:     up,
 	}
 	for range 2 {
-		in.Containers = append(in.Containers, hub.Container{System: up.ID, Name: "c", Updated: now.UnixMilli()})
+		in.Containers.Val = append(in.Containers.Val, hub.Container{System: up.ID, Name: "c", Updated: now.UnixMilli()})
 	}
 	r, err := Detail(in, DetailOptions{Sections: []Section{SectionServices, SectionContainers}, Limit: 1})
 	if err != nil {
@@ -607,7 +609,7 @@ func TestDetailUpdates(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Details: tt.details, Packages: tt.packages, PackagesErr: tt.readErr}
+			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Details: ok(tt.details), Packages: Read[*hub.PackageUpdates]{Val: tt.packages, Err: tt.readErr}}
 			r, err := Detail(in, DetailOptions{Sections: []Section{SectionUpdates}})
 			if err != nil {
 				t.Fatal(err)

@@ -54,22 +54,20 @@ type AmbiguousError struct {
 }
 
 func (e *AmbiguousError) Error() string {
-	return fmt.Sprintf("%q matches several systems: %s; use one of these IDs", e.Ref, withIDs(e.Matches))
+	return fmt.Sprintf("%q matches several systems: %s; use one of these IDs", e.Ref, sortedJoin(e.Matches, Label))
 }
+
+// Label names a system with its ID. A pick list answer is matched back by it.
+func Label(s hub.System) string { return s.Name + " (" + s.ID + ")" }
 
 func names(systems []hub.System) string {
-	n := make([]string, len(systems))
-	for i, s := range systems {
-		n[i] = s.Name
-	}
-	slices.Sort(n)
-	return strings.Join(n, ", ")
+	return sortedJoin(systems, func(s hub.System) string { return s.Name })
 }
 
-func withIDs(systems []hub.System) string {
+func sortedJoin(systems []hub.System, name func(hub.System) string) string {
 	n := make([]string, len(systems))
 	for i, s := range systems {
-		n[i] = s.Name + " (" + s.ID + ")"
+		n[i] = name(s)
 	}
 	slices.Sort(n)
 	return strings.Join(n, ", ")

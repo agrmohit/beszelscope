@@ -11,7 +11,8 @@ import (
 )
 
 // JSON tags follow Beszel v0.21.1 (internal/entities/system/system.go and
-// the collection schema). Unknown fields are ignored.
+// the collection schema). Unknown fields are ignored. Some fields are decoded
+// but not read yet; they mirror the schema for sections still to come.
 
 // StatType is a Beszel stats resolution. Each record averages this window;
 // rows are kept for 1h, 12h, 24h, 7d and 30d respectively.
@@ -97,6 +98,93 @@ const (
 	SmartUnknown SmartState = "UNKNOWN"
 )
 
+// ServiceState is a systemd unit's active state.
+type ServiceState int
+
+// The states Beszel records.
+const (
+	ServiceActive ServiceState = iota
+	ServiceInactive
+	ServiceFailed
+	ServiceActivating
+	ServiceDeactivating
+	ServiceReloading
+)
+
+func (s ServiceState) String() string {
+	switch s {
+	case ServiceActive:
+		return "active"
+	case ServiceInactive:
+		return "inactive"
+	case ServiceFailed:
+		return "failed"
+	case ServiceActivating:
+		return "activating"
+	case ServiceDeactivating:
+		return "deactivating"
+	case ServiceReloading:
+		return "reloading"
+	default: // a state a newer Beszel adds
+		return "unknown"
+	}
+}
+
+// ServiceSub is a systemd unit's sub-state.
+type ServiceSub int
+
+// The sub-states Beszel records.
+const (
+	SubDead ServiceSub = iota
+	SubRunning
+	SubExited
+	SubFailed
+	SubUnknown
+)
+
+func (s ServiceSub) String() string {
+	switch s {
+	case SubDead:
+		return "dead"
+	case SubRunning:
+		return "running"
+	case SubExited:
+		return "exited"
+	case SubFailed:
+		return "failed"
+	case SubUnknown:
+		return "unknown"
+	default:
+		return "unknown"
+	}
+}
+
+// Health is a container's health check result.
+type Health int
+
+// The results Beszel records.
+const (
+	HealthNone Health = iota
+	HealthStarting
+	HealthHealthy
+	HealthUnhealthy
+)
+
+func (h Health) String() string {
+	switch h {
+	case HealthNone:
+		return "none"
+	case HealthStarting:
+		return "starting"
+	case HealthHealthy:
+		return "healthy"
+	case HealthUnhealthy:
+		return "unhealthy"
+	default:
+		return "unknown"
+	}
+}
+
 // System is a monitored host with its latest summary.
 type System struct {
 	ID      string     `json:"id"`
@@ -143,8 +231,7 @@ type SystemDetails struct {
 	Podman   bool   `json:"podman"`
 }
 
-// Stats is one system_stats sample. GB fields are deprecated by Beszel but
-// are the only memory figures in rows from agents before 0.21.1.
+// Stats is one system_stats sample. Beszel deprecates the memory GB fields.
 type Stats struct {
 	CPU          float64              `json:"cpu"`
 	MaxCPU       float64              `json:"cpum"` // rollups only
@@ -252,8 +339,8 @@ type Container struct {
 	Image     string  `json:"image"`
 	Ports     string  `json:"ports"`
 	Status    string  `json:"status"` // Docker's text, e.g. "Up 3 days (healthy)"
-	Health    int     `json:"health"` // 0 none, 1 starting, 2 healthy, 3 unhealthy
-	CPU       float64 `json:"cpu"`    // % of the whole host
+	Health    Health  `json:"health"`
+	CPU       float64 `json:"cpu"` // % of the whole host
 	MemoryMiB float64 `json:"memory"`
 	NetBytes  float64 `json:"net"`     // bytes/s, sent + received
 	Updated   int64   `json:"updated"` // Unix ms
@@ -262,15 +349,15 @@ type Container struct {
 
 // Service is a systemd unit.
 type Service struct {
-	System  string  `json:"system"`
-	Name    string  `json:"name"`
-	State   int     `json:"state"` // 0 active, 1 inactive, 2 failed, 3 activating, 4 deactivating, 5 reloading
-	Sub     int     `json:"sub"`   // 0 dead, 1 running, 2 exited, 3 failed, 4 unknown
-	CPU     float64 `json:"cpu"`
-	CPUPeak float64 `json:"cpuPeak"`
-	Memory  uint64  `json:"memory"` // bytes
-	MemPeak uint64  `json:"memPeak"`
-	Updated int64   `json:"updated"` // Unix ms
+	System  string       `json:"system"`
+	Name    string       `json:"name"`
+	State   ServiceState `json:"state"`
+	Sub     ServiceSub   `json:"sub"`
+	CPU     float64      `json:"cpu"`
+	CPUPeak float64      `json:"cpuPeak"`
+	Memory  uint64       `json:"memory"` // bytes
+	MemPeak uint64       `json:"memPeak"`
+	Updated int64        `json:"updated"` // Unix ms
 }
 
 // SmartDevice is a disk's SMART summary.
@@ -431,7 +518,7 @@ func (c *Client) Monitors(ctx context.Context) ([]Monitor, error) {
 
 // SystemStats returns a system's samples of type t created at or after since, oldest first.
 func (c *Client) SystemStats(ctx context.Context, systemID string, t StatType, since time.Time) ([]SystemStats, error) {
-	f, err := statsFilter(systemID, t, "'"+since.UTC().Format("2006-01-02 15:04:05.000Z")+"'")
+	f, err := statsFilter(systemID, t, pbDate(since))
 	if err != nil {
 		return nil, err
 	}
@@ -442,8 +529,8 @@ func (c *Client) SystemStats(ctx context.Context, systemID string, t StatType, s
 // created, or the zero time when it has none. Beszel bumps systems.updated
 // when it rewrites the record, so that time is not when data last arrived.
 func (c *Client) LastStatsAt(ctx context.Context, systemID string) (time.Time, error) {
-	if !recordID.MatchString(systemID) {
-		return time.Time{}, fmt.Errorf("invalid system id %q", systemID)
+	if err := checkID(systemID); err != nil {
+		return time.Time{}, err
 	}
 	q := url.Values{
 		"fields": {"created"}, "filter": {"system='" + systemID + "'"}, "sort": {"-created"},
@@ -463,7 +550,7 @@ func (c *Client) LastStatsAt(ctx context.Context, systemID string) (time.Time, e
 
 // ContainerStats returns a system's container samples of type t created at or after since, oldest first.
 func (c *Client) ContainerStats(ctx context.Context, systemID string, t StatType, since time.Time) ([]ContainerStats, error) {
-	f, err := statsFilter(systemID, t, "'"+since.UTC().Format("2006-01-02 15:04:05.000Z")+"'")
+	f, err := statsFilter(systemID, t, pbDate(since))
 	if err != nil {
 		return nil, err
 	}
@@ -485,8 +572,8 @@ func (c *Client) MonitorStats(ctx context.Context, systemID string, t StatType, 
 // the agent, so it uses the live timeout.
 func (c *Client) PackageUpdates(ctx context.Context, systemID string) (PackageUpdates, error) {
 	var p PackageUpdates
-	if !recordID.MatchString(systemID) {
-		return p, fmt.Errorf("invalid system id %q", systemID)
+	if err := checkID(systemID); err != nil {
+		return p, err
 	}
 	q := url.Values{"system": {systemID}}
 	err := c.get(ctx, "api/beszel/package-updates", q, c.o.LiveTimeout, &p)
@@ -496,11 +583,23 @@ func (c *Client) PackageUpdates(ctx context.Context, systemID string) (PackageUp
 // recordID matches PocketBase record ids, so ids are safe inside a filter.
 var recordID = regexp.MustCompile(`^[a-z0-9]{1,15}$`)
 
+func checkID(id string) error {
+	if !recordID.MatchString(id) {
+		return fmt.Errorf("invalid system id %q", id)
+	}
+	return nil
+}
+
+// pbDate quotes t as a PocketBase filter date.
+func pbDate(t time.Time) string {
+	return "'" + t.UTC().Format("2006-01-02 15:04:05.000Z") + "'"
+}
+
 // statsFilter builds a filter from checked values only; no free text ever
 // reaches it. since is an already-quoted date or a bare number.
 func statsFilter(systemID string, t StatType, since string) (string, error) {
-	if !recordID.MatchString(systemID) {
-		return "", fmt.Errorf("invalid system id %q", systemID)
+	if err := checkID(systemID); err != nil {
+		return "", err
 	}
 	if !t.valid() {
 		return "", fmt.Errorf("invalid stats type %q", t)

@@ -1,6 +1,7 @@
 package report
 
 import (
+	"cmp"
 	"maps"
 	"slices"
 	"strings"
@@ -41,7 +42,7 @@ type MonitorRow struct {
 	Loss1hPct      *float64 `json:"loss_1h_pct,omitempty"`
 	Cert           *Cert    `json:"cert,omitempty"` // absent when unknown, not when fine
 	CheckedAgoS    *int64   `json:"checked_ago_s,omitempty"`
-	Problems       []string `json:"problems,omitempty"`
+	Problems       []Code   `json:"problems,omitempty"`
 }
 
 // Cert is an HTTPS target's certificate.
@@ -51,15 +52,12 @@ type Cert struct {
 }
 
 func network(in DetailInput) *Network {
-	if u := in.unavailable(in.System); u != "" {
+	if u := in.liveUnavailable(); u != "" {
 		return &Network{Unavailable: u}
 	}
-	if u := statsUnavailable(in); u != "" {
-		return &Network{Unavailable: u}
-	}
-	x := in.Latest.Stats
+	x := in.Latest.Val.Stats
 	n := &Network{
-		SampledAgoS:   new(ageS(in.Now, in.Latest.Created.Time)),
+		SampledAgoS:   new(ageS(in.Now, in.Latest.Val.Created.Time)),
 		SentBytesPerS: new(x.Bandwidth[0]),
 		RecvBytesPerS: new(x.Bandwidth[1]),
 		WiFiRSSIdBm:   x.WiFi,
@@ -70,7 +68,7 @@ func network(in DetailInput) *Network {
 			Name: name, SentBytesPerS: v[0], RecvBytesPerS: v[1], TotalSentBytes: v[2], TotalRecvBytes: v[3],
 		})
 	}
-	for _, m := range in.Monitors {
+	for _, m := range in.Monitors.Val {
 		if m.System != in.System.ID {
 			continue
 		}
@@ -116,11 +114,17 @@ func msFromUs(us float64) *float64 {
 
 // problemsFirst orders rows with problems before rows without, then by name.
 func problemsFirst(aProblems, bProblems int, aName, bName string) int {
-	if (aProblems > 0) != (bProblems > 0) {
-		if aProblems > 0 {
-			return -1
-		}
+	return cmp.Or(trueFirst(aProblems > 0, bProblems > 0), strings.Compare(aName, bName))
+}
+
+// trueFirst orders true before false.
+func trueFirst(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case a:
+		return -1
+	default:
 		return 1
 	}
-	return strings.Compare(aName, bName)
 }

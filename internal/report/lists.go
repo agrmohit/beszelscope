@@ -85,7 +85,7 @@ type ContainerRow struct {
 	MemBytes     uint64   `json:"mem_bytes"`
 	NetBytesPerS uint64   `json:"net_bytes_per_s"`
 	AgeS         int64    `json:"age_s"`
-	Problems     []string `json:"problems,omitempty"`
+	Problems     []Code   `json:"problems,omitempty"`
 }
 
 // Services is Beszel's Services tab: systemd units.
@@ -105,34 +105,18 @@ type ServiceRow struct {
 	CPUPct       *float64 `json:"cpu_pct,omitempty"`
 	MemBytes     uint64   `json:"mem_bytes"`
 	MemPeakBytes uint64   `json:"mem_peak_bytes"`
-	Problems     []string `json:"problems,omitempty"`
+	Problems     []Code   `json:"problems,omitempty"`
 }
 
 const mib = 1 << 20
 
-var (
-	healthNames = []string{"none", "starting", "healthy", "unhealthy"}
-	stateNames  = []string{"active", "inactive", "failed", "activating", "deactivating", "reloading"}
-	subNames    = []string{"dead", "running", "exited", "failed", "unknown"}
-)
-
-// enumName returns names[i], or "unknown" when the hub sends a newer value.
-func enumName(names []string, i int) string {
-	if i < 0 || i >= len(names) {
-		return "unknown"
-	}
-	return names[i]
-}
-
 func gpus(in DetailInput) *GPUs {
-	if u := in.unavailable(in.System); u != "" {
+	if u := in.liveUnavailable(); u != "" {
 		return &GPUs{Unavailable: u}
 	}
-	if u := statsUnavailable(in); u != "" {
-		return &GPUs{Unavailable: u}
-	}
-	g := &GPUs{SampledAgoS: new(ageS(in.Now, in.Latest.Created.Time))}
-	all := in.Latest.Stats.GPU
+	latest := in.Latest.Val
+	g := &GPUs{SampledAgoS: new(ageS(in.Now, latest.Created.Time))}
+	all := latest.Stats.GPU
 	for _, id := range slices.Sorted(maps.Keys(all)) {
 		x := all[id]
 		row := GPURow{ID: id, Name: x.Name, UsagePct: round(x.Usage, 1)}
@@ -151,25 +135,25 @@ func gpus(in DetailInput) *GPUs {
 }
 
 func containers(in DetailInput, o DetailOptions) (*Containers, string) {
-	if u := in.unavailable(in.System); u != "" {
+	if u := in.unavailable(); u != "" {
 		return &Containers{Unavailable: u}, ""
 	}
-	if in.ContainersErr != nil {
-		return &Containers{Unavailable: "could not read containers: " + in.ContainersErr.Error()}, ""
+	if err := in.Containers.Err; err != nil {
+		return &Containers{Unavailable: "could not read containers: " + err.Error()}, ""
 	}
 	var all []ContainerRow
 	unhealthy := 0
-	for _, c := range in.Containers {
+	for _, c := range in.Containers.Val {
 		if c.System != in.System.ID || containerStale(in.Now, c) {
 			continue
 		}
 		row := ContainerRow{
-			Name: c.Name, Image: c.Image, Status: c.Status, Health: enumName(healthNames, c.Health),
+			Name: c.Name, Image: c.Image, Status: c.Status, Health: c.Health.String(),
 			CPUPct: round(c.CPU, 2), MemBytes: uint64(c.MemoryMiB * mib), NetBytesPerS: uint64(c.NetBytes),
 			AgeS: ageS(in.Now, time.UnixMilli(c.Updated)),
 		}
-		if c.Health == 3 {
-			row.Problems = []string{CodeContainerUnhealthy}
+		if c.Health == hub.HealthUnhealthy {
+			row.Problems = []Code{CodeContainerUnhealthy}
 			unhealthy++
 		}
 		all = append(all, row)
@@ -195,24 +179,24 @@ func containers(in DetailInput, o DetailOptions) (*Containers, string) {
 }
 
 func services(in DetailInput, o DetailOptions) (*Services, string) {
-	if u := in.unavailable(in.System); u != "" {
+	if u := in.unavailable(); u != "" {
 		return &Services{Unavailable: u}, ""
 	}
-	if in.ServicesErr != nil {
-		return &Services{Unavailable: "could not read services: " + in.ServicesErr.Error()}, ""
+	if err := in.Services.Err; err != nil {
+		return &Services{Unavailable: "could not read services: " + err.Error()}, ""
 	}
 	var all []ServiceRow
 	failed := 0
-	for _, s := range in.Services {
+	for _, s := range in.Services.Val {
 		if s.System != in.System.ID {
 			continue
 		}
 		row := ServiceRow{
-			Name: s.Name, State: enumName(stateNames, s.State), Sub: enumName(subNames, s.Sub),
+			Name: s.Name, State: s.State.String(), Sub: s.Sub.String(),
 			CPUPct: round(s.CPU, 2), MemBytes: s.Memory, MemPeakBytes: s.MemPeak,
 		}
-		if s.State == 2 {
-			row.Problems = []string{CodeServiceFailed}
+		if s.State == hub.ServiceFailed {
+			row.Problems = []Code{CodeServiceFailed}
 			failed++
 		}
 		all = append(all, row)
@@ -264,12 +248,6 @@ func pick[T any](rows []T, o DetailOptions, what string, key func(T) listKey) ([
 	}
 	slices.SortStableFunc(kept, func(a, b T) int {
 		ka, kb := key(a), key(b)
-		if ka.problem != kb.problem {
-			if ka.problem {
-				return -1
-			}
-			return 1
-		}
 		var c int
 		switch o.Sort {
 		case SortMem:
@@ -278,7 +256,7 @@ func pick[T any](rows []T, o DetailOptions, what string, key func(T) listKey) ([
 		case SortCPU:
 			c = cmp.Compare(kb.cpu, ka.cpu)
 		}
-		return cmp.Or(c, strings.Compare(ka.name, kb.name))
+		return cmp.Or(trueFirst(ka.problem, kb.problem), c, strings.Compare(ka.name, kb.name))
 	})
 	limit := o.Limit
 	if limit <= 0 {
@@ -312,7 +290,7 @@ func containerStale(now time.Time, c hub.Container) bool {
 // one for 10 minutes; a name with a live row is never gone.
 func goneContainers(in FleetInput, system string) []string {
 	live, seen := map[string]bool{}, map[string]bool{}
-	for _, c := range in.Containers {
+	for _, c := range in.Containers.Val {
 		if c.System == system && !containerStale(in.Now, c) {
 			live[c.Name] = true
 		}
@@ -324,16 +302,14 @@ func goneContainers(in FleetInput, system string) []string {
 			gone = append(gone, name)
 		}
 	}
-	for _, c := range in.Containers {
+	for _, c := range in.Containers.Val {
 		if c.System == system && containerStale(in.Now, c) {
 			add(c.Name)
 		}
 	}
-	for _, cs := range in.RecentContainers {
-		if cs.System == system {
-			for _, st := range cs.Stats {
-				add(st.Name)
-			}
+	for _, cs := range in.RecentContainers[system].Val {
+		for _, st := range cs.Stats {
+			add(st.Name)
 		}
 	}
 	return gone

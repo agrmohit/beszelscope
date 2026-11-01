@@ -35,7 +35,7 @@ func notChecked(d *hub.SystemDetails) string {
 	switch {
 	case d == nil:
 		return "updates: this agent does not check packages; Beszel checks them only on agents running natively on Linux, not in a container"
-	case d.OS != 0:
+	case d.OS != hub.OSLinux:
 		return "updates: Beszel checks packages only on Linux; this host runs " + osName(*d)
 	default:
 		return "updates: this Linux agent does not check packages; it runs in a container, has checks turned off, or found no supported package manager"
@@ -43,24 +43,21 @@ func notChecked(d *hub.SystemDetails) string {
 }
 
 func updates(in DetailInput) *UpdatesSection {
-	if u := in.unavailable(in.System); u != "" {
+	if u := in.unavailable(); u != "" {
 		return &UpdatesSection{Unavailable: u}
 	}
-	if in.PackagesErr != nil {
+	if err := in.Packages.Err; err != nil {
 		// The counts on the systems row come from the same agent check.
-		out := &UpdatesSection{Unavailable: "could not ask the agent for the package list: " + in.PackagesErr.Error()}
-		if pu := in.System.Info.PackageUpdates; len(pu) > 0 {
-			out.Total = new(int(pu[0]))
-			if len(pu) > 1 {
-				out.Security = new(int(pu[1]))
-			}
+		out := &UpdatesSection{Unavailable: "could not ask the agent for the package list: " + err.Error()}
+		if u := packageCounts(in.System.Info); u != nil {
+			out.Total, out.Security = &u.Total, u.Security
 		}
 		return out
 	}
-	p := in.Packages
+	p := in.Packages.Val
 	switch {
 	case p == nil || p.Manager == "" && p.CheckedAt == 0:
-		return &UpdatesSection{Absent: []string{notChecked(in.Details)}}
+		return &UpdatesSection{Absent: []string{notChecked(in.Details.Val)}}
 	case p.CheckedAt == 0:
 		return &UpdatesSection{Manager: p.Manager, Absent: []string{"updates: the agent's first package check has not finished"}}
 	}
@@ -79,13 +76,7 @@ func updates(in DetailInput) *UpdatesSection {
 		out.Security = &security
 	}
 	slices.SortStableFunc(out.Packages, func(a, b PackageRow) int {
-		if a.Security != b.Security {
-			if a.Security {
-				return -1
-			}
-			return 1
-		}
-		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+		return cmp.Or(trueFirst(a.Security, b.Security), cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)))
 	})
 	return out
 }

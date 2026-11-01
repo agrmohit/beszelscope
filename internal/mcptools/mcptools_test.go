@@ -23,26 +23,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
+	"github.com/agrmohit/beszelscope/internal/hub/hubtest"
 	"github.com/agrmohit/beszelscope/internal/logctx"
 )
 
-// captured is when the hub fixtures were taken. Tests read it from meta.json
-// so ages stay real after a recapture; a stale copy clamped them all to 0.
-var captured = fixtureTime()
-
-func fixtureTime() time.Time {
-	b, err := os.ReadFile("../hub/testdata/hub/meta.json")
-	if err != nil {
-		panic(err)
-	}
-	var meta struct {
-		CapturedAt time.Time `json:"captured_at"`
-	}
-	if err := json.Unmarshal(b, &meta); err != nil {
-		panic(err)
-	}
-	return meta.CapturedAt
-}
+var captured = hubtest.CapturedAt()
 
 // fakeHub serves fixed records; fail and panicOn make one method misbehave.
 type fakeHub struct {
@@ -178,56 +163,36 @@ func (f *fakeHub) MonitorStats(_ context.Context, systemID string, t hub.StatTyp
 	return reply(f, "MonitorStats", out)
 }
 
-func load[T any](t *testing.T, name string) []T {
-	t.Helper()
-	root, err := os.OpenRoot("../hub/testdata")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = root.Close() }()
-	b, err := root.ReadFile(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var p struct {
-		Items []T `json:"items"`
-	}
-	if err := json.Unmarshal(b, &p); err != nil {
-		t.Fatal(err)
-	}
-	return p.Items
-}
-
 func fixtureHub(t *testing.T) *fakeHub {
 	t.Helper()
 	return &fakeHub{
-		systems:    load[hub.System](t, "hub/systems.json"),
-		services:   load[hub.Service](t, "hub/systemd_services.json"),
-		containers: load[hub.Container](t, "hub/containers.json"),
-		smart:      load[hub.SmartDevice](t, "hub/smart_devices.json"),
-		pools:      load[hub.ZfsPool](t, "handmade/zfs_pools.json"),
-		monitors:   load[hub.Monitor](t, "hub/network_monitors.json"),
-		details:    load[hub.SystemDetails](t, "hub/system_details.json"),
+		systems:    hubtest.Load[hub.System](t, "hub/systems.json"),
+		services:   hubtest.Load[hub.Service](t, "hub/systemd_services.json"),
+		containers: hubtest.Load[hub.Container](t, "hub/containers.json"),
+		smart:      hubtest.Load[hub.SmartDevice](t, "hub/smart_devices.json"),
+		pools:      hubtest.Load[hub.ZfsPool](t, "handmade/zfs_pools.json"),
+		monitors:   hubtest.Load[hub.Monitor](t, "hub/network_monitors.json"),
+		details:    hubtest.Load[hub.SystemDetails](t, "hub/system_details.json"),
 		stats: slices.Concat(
-			load[hub.SystemStats](t, "hub/system_stats_latest_alpha.json"),
-			load[hub.SystemStats](t, "hub/system_stats_latest_bravo.json"),
-			load[hub.SystemStats](t, "hub/system_stats_latest_charlie.json"),
-			load[hub.SystemStats](t, "hub/system_stats_bravo_1m.json"),
-			load[hub.SystemStats](t, "hub/system_stats_bravo_10m.json"),
-			load[hub.SystemStats](t, "hub/system_stats_bravo_20m.json"),
-			load[hub.SystemStats](t, "hub/system_stats_bravo_120m.json"),
-			load[hub.SystemStats](t, "hub/system_stats_bravo_480m.json"),
+			hubtest.Load[hub.SystemStats](t, "hub/system_stats_latest_alpha.json"),
+			hubtest.Load[hub.SystemStats](t, "hub/system_stats_latest_bravo.json"),
+			hubtest.Load[hub.SystemStats](t, "hub/system_stats_latest_charlie.json"),
+			hubtest.Load[hub.SystemStats](t, "hub/system_stats_bravo_1m.json"),
+			hubtest.Load[hub.SystemStats](t, "hub/system_stats_bravo_10m.json"),
+			hubtest.Load[hub.SystemStats](t, "hub/system_stats_bravo_20m.json"),
+			hubtest.Load[hub.SystemStats](t, "hub/system_stats_bravo_120m.json"),
+			hubtest.Load[hub.SystemStats](t, "hub/system_stats_bravo_480m.json"),
 		),
 		containerStats: slices.Concat(
-			load[hub.ContainerStats](t, "hub/container_stats_bravo_1m.json"),
-			load[hub.ContainerStats](t, "hub/container_stats_bravo_20m.json"),
+			hubtest.Load[hub.ContainerStats](t, "hub/container_stats_bravo_1m.json"),
+			hubtest.Load[hub.ContainerStats](t, "hub/container_stats_bravo_20m.json"),
 		),
 		monitorStats: slices.Concat(
-			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_1m.json"),
-			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_10m.json"),
-			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_20m.json"),
-			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_120m.json"),
-			load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_480m.json"),
+			hubtest.Load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_1m.json"),
+			hubtest.Load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_10m.json"),
+			hubtest.Load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_20m.json"),
+			hubtest.Load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_120m.json"),
+			hubtest.Load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_480m.json"),
 		),
 		fail: map[string]error{},
 	}

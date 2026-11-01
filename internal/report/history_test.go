@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
+	"github.com/agrmohit/beszelscope/internal/hub/hubtest"
 )
 
 func TestParseMetrics(t *testing.T) {
@@ -214,8 +215,8 @@ func TestHistoryStats(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := HistoryInput{
-				Now: now, Systems: []hub.System{up}, Window: mustWindow("7d"),
-				Stats: map[string][]hub.SystemStats{up.ID: tt.rows}, StatsErrs: map[string]error{up.ID: tt.readErr},
+				Now: now, Window: mustWindow("7d"),
+				Systems: []SystemHistory{{System: up, Stats: Read[[]hub.SystemStats]{Val: tt.rows, Err: tt.readErr}}},
 			}
 			r, err := History(in, HistoryOptions{Metrics: metrics(t, tt.metrics...)})
 			if tt.wantErr != "" {
@@ -274,8 +275,8 @@ func TestHistoryContainers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := HistoryInput{
-				Now: now, Systems: []hub.System{up}, Window: mustWindow("7d"),
-				Containers: map[string][]hub.ContainerStats{up.ID: tt.rows}, ContainerErrs: map[string]error{up.ID: tt.readErr},
+				Now: now, Window: mustWindow("7d"),
+				Systems: []SystemHistory{{System: up, Containers: Read[[]hub.ContainerStats]{Val: tt.rows, Err: tt.readErr}}},
 			}
 			r, err := History(in, HistoryOptions{Metrics: metrics(t, tt.metric)})
 			if tt.wantErr != "" {
@@ -365,8 +366,8 @@ func TestHistoryMonitors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := HistoryInput{
-				Now: now, Systems: []hub.System{up}, Window: mustWindow(tt.window), Monitors: tt.monitors, MonitorsErr: tt.monitorErr,
-				MonitorStats: map[string][]hub.MonitorStats{up.ID: tt.rows}, MonitorStatsErrs: map[string]error{up.ID: tt.statsErr},
+				Now: now, Window: mustWindow(tt.window), Monitors: Read[[]hub.Monitor]{Val: tt.monitors, Err: tt.monitorErr},
+				Systems: []SystemHistory{{System: up, MonitorStats: Read[[]hub.MonitorStats]{Val: tt.rows, Err: tt.statsErr}}},
 			}
 			r, err := History(in, HistoryOptions{Metrics: metrics(t, tt.metric)})
 			if tt.wantErr != "" {
@@ -409,7 +410,7 @@ func TestHistoryPoints(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := HistoryInput{Now: now, Systems: []hub.System{up}, Window: mustWindow("7d"), Stats: map[string][]hub.SystemStats{up.ID: statRows()}}
+			in := HistoryInput{Now: now, Window: mustWindow("7d"), Systems: []SystemHistory{{System: up, Stats: ok(statRows())}}}
 			r, err := History(in, HistoryOptions{Metrics: metrics(t, tt.metrics...), Points: tt.points})
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
@@ -432,8 +433,11 @@ func TestHistoryEnvelope(t *testing.T) {
 	other := upSystem()
 	other.ID, other.Name = "otherotherother", "db"
 	in := HistoryInput{
-		Now: now, Systems: []hub.System{other, up}, Window: mustWindow("1h"), TokenExpiresAt: now.Add(24 * time.Hour),
-		Stats: map[string][]hub.SystemStats{up.ID: {{Created: ago(time.Minute), Stats: hub.Stats{CPU: 9}}}},
+		Now: now, Window: mustWindow("1h"), TokenExpiresAt: now.Add(24 * time.Hour),
+		Systems: []SystemHistory{
+			{System: other},
+			{System: up, Stats: ok([]hub.SystemStats{{Created: ago(time.Minute), Stats: hub.Stats{CPU: 9}}})},
+		},
 	}
 	r, err := History(in, HistoryOptions{Metrics: metrics(t, "cpu")})
 	if err != nil {
@@ -450,8 +454,8 @@ func TestHistoryEnvelope(t *testing.T) {
 
 // TestHistoryGolden runs metric_history over the captured bravo history.
 func TestHistoryGolden(t *testing.T) {
-	systems := load[hub.System](t, "hub/systems.json")
-	monitors := load[hub.Monitor](t, "hub/network_monitors.json")
+	systems := hubtest.Load[hub.System](t, "hub/systems.json")
+	monitors := hubtest.Load[hub.Monitor](t, "hub/network_monitors.json")
 	var bravo hub.System
 	for _, s := range systems {
 		if s.Name == "bravo" {
@@ -473,27 +477,25 @@ func TestHistoryGolden(t *testing.T) {
 	for _, c := range calls {
 		w := mustWindow(c.window)
 		since := captured.Add(-w.Span)
-		in := HistoryInput{
-			Now: captured, Systems: []hub.System{bravo}, Window: w, Monitors: monitors,
-			Stats: map[string][]hub.SystemStats{}, Containers: map[string][]hub.ContainerStats{}, MonitorStats: map[string][]hub.MonitorStats{},
-		}
-		for _, r := range load[hub.SystemStats](t, "hub/system_stats_bravo_"+string(w.Type)+".json") {
+		sh := SystemHistory{System: bravo}
+		for _, r := range hubtest.Load[hub.SystemStats](t, "hub/system_stats_bravo_"+string(w.Type)+".json") {
 			if !r.Created.Before(since) {
-				in.Stats[bravo.ID] = append(in.Stats[bravo.ID], r)
+				sh.Stats.Val = append(sh.Stats.Val, r)
 			}
 		}
 		if w.Type == hub.Stat1m || w.Type == hub.Stat20m {
-			for _, r := range load[hub.ContainerStats](t, "hub/container_stats_bravo_"+string(w.Type)+".json") {
+			for _, r := range hubtest.Load[hub.ContainerStats](t, "hub/container_stats_bravo_"+string(w.Type)+".json") {
 				if !r.Created.Before(since) {
-					in.Containers[bravo.ID] = append(in.Containers[bravo.ID], r)
+					sh.Containers.Val = append(sh.Containers.Val, r)
 				}
 			}
 		}
-		for _, r := range load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_"+string(w.Type)+".json") {
+		for _, r := range hubtest.Load[hub.MonitorStats](t, "hub/network_monitor_stats_bravo_"+string(w.Type)+".json") {
 			if r.Created >= since.UnixMilli() {
-				in.MonitorStats[bravo.ID] = append(in.MonitorStats[bravo.ID], r)
+				sh.MonitorStats.Val = append(sh.MonitorStats.Val, r)
 			}
 		}
+		in := HistoryInput{Now: captured, Window: w, Monitors: ok(monitors), Systems: []SystemHistory{sh}}
 		r, err := History(in, HistoryOptions{Metrics: metrics(t, c.metrics...), Points: c.points})
 		if err != nil {
 			t.Fatal(err)

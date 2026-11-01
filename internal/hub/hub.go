@@ -65,6 +65,7 @@ func NewTransport() *http.Transport {
 	return &http.Transport{
 		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        8,
+		MaxIdleConnsPerHost: 8, // every request goes to one host; the default keeps 2
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 5 * time.Second,
 	}

@@ -2,10 +2,8 @@ package mcptools
 
 import (
 	"context"
-	"fmt"
 	"slices"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
@@ -30,15 +28,9 @@ type historyIn struct {
 }
 
 func addHistory(s *mcp.Server, t *tools) {
-	in, err := jsonschema.For[historyIn](nil)
-	if err != nil {
-		panic(fmt.Sprintf("metric_history input schema: %v", err)) // fixed type; fails only on a code bug
-	}
-	for name, n := range map[string]int{"systems": report.MaxHistorySystems, "metrics": report.MaxMetrics} {
-		p := in.Properties[name]
-		p.Types, p.Type = nil, "array" // not ["null","array"]
-		p.MinItems, p.MaxItems, p.UniqueItems = new(1), new(n), true
-	}
+	in := inputSchema[historyIn]("metric_history")
+	array(in.Properties["systems"], 1, report.MaxHistorySystems)
+	array(in.Properties["metrics"], 1, report.MaxMetrics)
 	window := in.Properties["window"]
 	for _, w := range report.Windows {
 		window.Enum = append(window.Enum, w.Name)
@@ -67,50 +59,41 @@ func (t *tools) history(ctx context.Context, req *mcp.CallToolRequest, in histor
 	if ask != nil || err != nil {
 		return ask, report.HistoryResult{}, err
 	}
-	ids, ask, err := resolveAll(req, systems, in.Systems)
+	picked, ask, err := resolveAll(req, systems, in.Systems)
 	if ask != nil || err != nil {
 		return ask, report.HistoryResult{}, err
 	}
 
-	input := report.HistoryInput{
-		Now: now, TokenExpiresAt: t.d.TokenExpiresAt, Window: w,
-		Stats: map[string][]hub.SystemStats{}, Containers: map[string][]hub.ContainerStats{}, MonitorStats: map[string][]hub.MonitorStats{},
-		StatsErrs: map[string]error{}, ContainerErrs: map[string]error{}, MonitorStatsErrs: map[string]error{},
-	}
-	for _, id := range ids {
-		if !slices.ContainsFunc(input.Systems, func(s hub.System) bool { return s.ID == id }) {
-			input.Systems = append(input.Systems, systems[slices.IndexFunc(systems, func(s hub.System) bool { return s.ID == id })])
-		}
-	}
+	input := report.HistoryInput{Now: now, TokenExpiresAt: t.d.TokenExpiresAt, Window: w, Systems: make([]report.SystemHistory, len(picked))}
 	// One read per system and source, whatever the number of metrics. A
-	// failed read empties only the series that need it, with a note.
+	// failed read empties only the series that need it, with a note. Each
+	// read writes its own field, so they share no lock.
 	since := now.Add(-w.Span)
 	var fe fetcher
 	if slices.Contains(sources, report.SourceMonitors) {
-		fe.run("network monitors", "", func() (err error) {
-			input.Monitors, input.MonitorsErr = t.d.Hub.Monitors(ctx)
-			return nil
-		})
+		read(ctx, &fe, &input.Monitors, t.d.Hub.Monitors)
 	}
-	for _, s := range input.Systems {
+	for i, s := range picked {
+		sh := &input.Systems[i]
+		sh.System = s
 		for _, src := range sources {
-			fe.run("history", "", func() error {
-				switch src {
-				case report.SourceStats:
-					rows, err := t.d.Hub.SystemStats(ctx, s.ID, w.Type, since)
-					fe.locked(func() { input.Stats[s.ID], input.StatsErrs[s.ID] = rows, err })
-				case report.SourceContainers:
-					rows, err := t.d.Hub.ContainerStats(ctx, s.ID, w.Type, since)
-					fe.locked(func() { input.Containers[s.ID], input.ContainerErrs[s.ID] = rows, err })
-				case report.SourceMonitors:
-					rows, err := t.d.Hub.MonitorStats(ctx, s.ID, w.Type, since)
-					fe.locked(func() { input.MonitorStats[s.ID], input.MonitorStatsErrs[s.ID] = rows, err })
-				}
-				return nil
-			})
+			switch src {
+			case report.SourceStats:
+				read(ctx, &fe, &sh.Stats, func(ctx context.Context) ([]hub.SystemStats, error) {
+					return t.d.Hub.SystemStats(ctx, s.ID, w.Type, since)
+				})
+			case report.SourceContainers:
+				read(ctx, &fe, &sh.Containers, func(ctx context.Context) ([]hub.ContainerStats, error) {
+					return t.d.Hub.ContainerStats(ctx, s.ID, w.Type, since)
+				})
+			case report.SourceMonitors:
+				read(ctx, &fe, &sh.MonitorStats, func(ctx context.Context) ([]hub.MonitorStats, error) {
+					return t.d.Hub.MonitorStats(ctx, s.ID, w.Type, since)
+				})
+			}
 		}
 	}
-	fe.wait() // every read records its own error
+	fe.wait()
 
 	res, err := report.History(input, report.HistoryOptions{Metrics: metrics, Points: in.Points})
 	if err != nil {

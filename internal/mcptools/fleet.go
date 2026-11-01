@@ -2,12 +2,8 @@ package mcptools
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"slices"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
@@ -33,13 +29,8 @@ type fleetIn struct {
 const maxFleetSystems = 20
 
 func addFleet(s *mcp.Server, t *tools) {
-	in, err := jsonschema.For[fleetIn](nil)
-	if err != nil {
-		panic(fmt.Sprintf("fleet_status input schema: %v", err)) // fixed type; fails only on a code bug
-	}
-	in.Properties["systems"].Types, in.Properties["systems"].Type = nil, "array" // not ["null","array"]
-	in.Properties["systems"].MaxItems = new(maxFleetSystems)
-	in.Properties["systems"].UniqueItems = true
+	in := inputSchema[fleetIn]("fleet_status")
+	array(in.Properties["systems"], 0, maxFleetSystems)
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "fleet_status",
 		Description: fleetDescription,
@@ -54,85 +45,30 @@ func (t *tools) fleet(ctx context.Context, req *mcp.CallToolRequest, in fleetIn)
 	if ask != nil || err != nil {
 		return ask, report.FleetResult{}, err
 	}
-	ids, ask, err := resolveAll(req, systems, in.Systems)
+	picked, ask, err := resolveAll(req, systems, in.Systems)
 	if ask != nil || err != nil {
 		return ask, report.FleetResult{}, err
 	}
 
 	input := report.FleetInput{
-		Now: now, HubVersion: t.d.HubVersion, TokenExpiresAt: t.d.TokenExpiresAt, Systems: systems,
-		LastSeen: map[string]time.Time{},
+		Now: now, HubVersion: t.d.HubVersion, TokenExpiresAt: t.d.TokenExpiresAt, Systems: picked,
+		RecentContainers: map[string]report.Read[[]hub.ContainerStats]{}, LastSeen: map[string]report.Read[time.Time]{},
 	}
 	var fe fetcher
-	const lacks = "related problems may be missing"
-	fe.run("systemd services", lacks, func() (err error) { input.Services, err = t.d.Hub.Services(ctx); return err })
-	fe.run("containers", lacks, func() (err error) { input.Containers, err = t.d.Hub.Containers(ctx); return err })
-	fe.run("SMART devices", lacks, func() (err error) { input.Smart, err = t.d.Hub.SmartDevices(ctx); return err })
-	fe.run("storage pools", lacks, func() (err error) { input.Pools, err = t.d.Hub.ZfsPools(ctx); return err })
-	fe.run("network monitors", lacks, func() (err error) { input.Monitors, err = t.d.Hub.Monitors(ctx); return err })
-	for _, s := range systems {
-		if len(ids) > 0 && !slices.Contains(ids, s.ID) {
-			continue
-		}
+	read(ctx, &fe, &input.Services, t.d.Hub.Services)
+	read(ctx, &fe, &input.Containers, t.d.Hub.Containers)
+	read(ctx, &fe, &input.Smart, t.d.Hub.SmartDevices)
+	read(ctx, &fe, &input.Pools, t.d.Hub.ZfsPools)
+	read(ctx, &fe, &input.Monitors, t.d.Hub.Monitors)
+	for _, s := range picked {
 		if s.Status != hub.StatusUp {
-			t.lastSeen(ctx, &fe, s, &input)
+			t.readLastSeen(ctx, &fe, &input, s)
 			continue
 		}
-		fe.run("container history of "+s.Name, lacks, func() error {
-			cs, err := t.d.Hub.ContainerStats(ctx, s.ID, hub.Stat10m, now.Add(-time.Hour))
-			fe.locked(func() { input.RecentContainers = append(input.RecentContainers, cs...) })
-			return err
+		readKey(ctx, &fe, input.RecentContainers, s.ID, func(ctx context.Context) ([]hub.ContainerStats, error) {
+			return t.d.Hub.ContainerStats(ctx, s.ID, hub.Stat10m, now.Add(-time.Hour))
 		})
 	}
-	warnings := fe.wait()
-
-	res, err := report.Fleet(input, report.FleetOptions{Systems: ids, ProblemsOnly: in.ProblemsOnly})
-	if err != nil {
-		return nil, report.FleetResult{}, err
-	}
-	res.Warnings = append(res.Warnings, warnings...)
-	return nil, res, nil
-}
-
-// lastSeen starts the read of when s last sent data. Beszel's updated time
-// moves on record rewrites, so it is only the fallback.
-func (t *tools) lastSeen(ctx context.Context, fe *fetcher, s hub.System, in *report.FleetInput) {
-	fe.run("last data of "+s.Name, "its last-seen time is when its status last changed", func() error {
-		seen, err := t.d.Hub.LastStatsAt(ctx, s.ID)
-		if err == nil {
-			fe.locked(func() { in.LastSeen[s.ID] = seen })
-		}
-		return err
-	})
-}
-
-// resolveAll turns names into system IDs. For ambiguous names it returns
-// a request asking the user, when the client can ask and has not answered.
-func resolveAll(req *mcp.CallToolRequest, systems []hub.System, refs []string) ([]string, *mcp.CallToolResult, error) {
-	ids := make([]string, 0, len(refs))
-	questions := mcp.InputRequestMap{}
-	for _, ref := range refs {
-		s, err := report.Resolve(systems, ref)
-		amb, ambiguous := errors.AsType[*report.AmbiguousError](err)
-		switch {
-		case err == nil:
-			ids = append(ids, s.ID)
-		case !ambiguous:
-			return nil, nil, err
-		default:
-			id, answered := pickedID(req, amb)
-			switch {
-			case id != "":
-				ids = append(ids, id)
-			case !answered && canElicit(req, "form"):
-				questions[pickID(ref)] = pickRequest(amb)
-			default:
-				return nil, nil, err // declined, or the client cannot ask
-			}
-		}
-	}
-	if len(questions) > 0 {
-		return nil, &mcp.CallToolResult{InputRequests: questions}, nil
-	}
-	return ids, nil, nil
+	fe.wait()
+	return nil, report.Fleet(input, report.FleetOptions{ProblemsOnly: in.ProblemsOnly}), nil
 }

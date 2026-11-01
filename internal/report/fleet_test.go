@@ -11,29 +11,14 @@ import (
 	"time"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
+	"github.com/agrmohit/beszelscope/internal/hub/hubtest"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
 var now = time.Date(2026, 10, 30, 22, 0, 0, 0, time.UTC)
 
-// captured is when the hub fixtures were taken. Tests read it from meta.json
-// so ages stay real after a recapture; a stale copy clamped them all to 0.
-var captured = fixtureTime()
-
-func fixtureTime() time.Time {
-	b, err := os.ReadFile("../hub/testdata/hub/meta.json")
-	if err != nil {
-		panic(err)
-	}
-	var meta struct {
-		CapturedAt time.Time `json:"captured_at"`
-	}
-	if err := json.Unmarshal(b, &meta); err != nil {
-		panic(err)
-	}
-	return meta.CapturedAt
-}
+var captured = hubtest.CapturedAt()
 
 func ago(d time.Duration) hub.Time { return hub.Time{Time: now.Add(-d)} }
 
@@ -92,7 +77,7 @@ func problems(r FleetResult) []string {
 	var out []string
 	for _, row := range r.Systems {
 		for _, p := range row.Problems {
-			out = append(out, row.Name+": "+p.Code+"("+itoa(p.Count)+")@"+p.Section+": "+p.Detail)
+			out = append(out, row.Name+": "+string(p.Code)+"("+itoa(p.Count)+")@"+string(p.Section)+": "+p.Detail)
 		}
 	}
 	return out
@@ -134,17 +119,17 @@ func TestFleetProblems(t *testing.T) {
 		},
 		{
 			name: "failed units grouped and sorted",
-			in: FleetInput{Systems: []hub.System{sys}, Services: []hub.Service{
+			in: FleetInput{Systems: []hub.System{sys}, Services: ok([]hub.Service{
 				{System: sys.ID, Name: "zeta.service", State: 2},
 				{System: sys.ID, Name: "alpha.service", State: 2},
 				{System: sys.ID, Name: "ok.service", State: 0},
 				{System: "other", Name: "x.service", State: 2},
-			}},
+			})},
 			want: []string{"web: service_failed(2)@services: alpha.service, zeta.service"},
 		},
 		{
 			name: "more than 5 names are capped",
-			in: FleetInput{Systems: []hub.System{sys}, Services: []hub.Service{
+			in: FleetInput{Systems: []hub.System{sys}, Services: ok([]hub.Service{
 				{System: sys.ID, Name: "a", State: 2},
 				{System: sys.ID, Name: "b", State: 2},
 				{System: sys.ID, Name: "c", State: 2},
@@ -152,77 +137,80 @@ func TestFleetProblems(t *testing.T) {
 				{System: sys.ID, Name: "e", State: 2},
 				{System: sys.ID, Name: "f", State: 2},
 				{System: sys.ID, Name: "g", State: 2},
-			}},
+			})},
 			want: []string{"web: service_failed(7)@services: a, b, c, d, e +2 more"},
 		},
 		{
 			name: "unhealthy container",
-			in: FleetInput{Systems: []hub.System{sys}, Containers: []hub.Container{
+			in: FleetInput{Systems: []hub.System{sys}, Containers: ok([]hub.Container{
 				{System: sys.ID, Name: "app", Health: 3, Updated: now.Add(-time.Minute).UnixMilli()},
 				{System: sys.ID, Name: "ok", Health: 2, Updated: now.Add(-time.Minute).UnixMilli()},
-			}},
+			})},
 			want: []string{"web: container_unhealthy(1)@containers: app"},
 		},
 		{
 			name: "stopped container: stale row",
-			in: FleetInput{Systems: []hub.System{sys}, Containers: []hub.Container{
+			in: FleetInput{Systems: []hub.System{sys}, Containers: ok([]hub.Container{
 				{System: sys.ID, Name: "app", Health: 3, Updated: now.Add(-4 * time.Minute).UnixMilli()},
 				{System: sys.ID, Name: "fresh", Updated: now.Add(-3 * time.Minute).UnixMilli()},
-			}},
+			})},
 			want: []string{"web: container_gone(1)@containers: app"},
 		},
 		{
 			// Recreating a container gives it a new ID, so Beszel keeps the
 			// old row for 10 minutes beside the live one.
 			name: "recreated container: stale old row beside a live one is not gone",
-			in: FleetInput{Systems: []hub.System{sys}, Containers: []hub.Container{
+			in: FleetInput{Systems: []hub.System{sys}, Containers: ok([]hub.Container{
 				{System: sys.ID, Name: "app", Updated: now.Add(-5 * time.Minute).UnixMilli()},
 				{System: sys.ID, Name: "app", Updated: now.Add(-10 * time.Second).UnixMilli()},
-			}},
+			})},
 			want: nil,
 		},
 		{
 			name: "container ran in the last hour, gone now",
 			in: FleetInput{
 				Systems:    []hub.System{sys},
-				Containers: []hub.Container{{System: sys.ID, Name: "still", Updated: now.UnixMilli()}},
-				RecentContainers: []hub.ContainerStats{
-					{System: sys.ID, Stats: []hub.ContainerStat{{Name: "still"}, {Name: "crashed"}}},
-					{System: sys.ID, Stats: []hub.ContainerStat{{Name: "crashed"}}},
-					{System: "other", Stats: []hub.ContainerStat{{Name: "elsewhere"}}},
+				Containers: ok([]hub.Container{{System: sys.ID, Name: "still", Updated: now.UnixMilli()}}),
+				RecentContainers: map[string]Read[[]hub.ContainerStats]{
+					sys.ID: ok([]hub.ContainerStats{
+						{System: sys.ID, Stats: []hub.ContainerStat{{Name: "still"}, {Name: "crashed"}}},
+						{System: sys.ID, Stats: []hub.ContainerStat{{Name: "crashed"}}},
+					}),
+					"other": ok([]hub.ContainerStats{{System: "other", Stats: []hub.ContainerStat{{Name: "elsewhere"}}}}),
 				},
 			},
 			want: []string{"web: container_gone(1)@containers: crashed"},
 		},
 		{
 			name: "smart failed and warning; model preferred",
-			in: FleetInput{Systems: []hub.System{sys}, Smart: []hub.SmartDevice{
+			in: FleetInput{Systems: []hub.System{sys}, Smart: ok([]hub.SmartDevice{
 				{System: sys.ID, Name: "/dev/sda", Model: "WDC A", State: "FAILED"},
 				{System: sys.ID, Name: "/dev/sdb", State: "WARNING"},
 				{System: sys.ID, Name: "/dev/sdc", State: "UNKNOWN"},
 				{System: sys.ID, Name: "/dev/sdd", State: "PASSED"},
-			}},
+				{System: "other", Name: "/dev/sde", State: "FAILED"},
+			})},
 			want: []string{"web: smart_failed(1)@disk: WDC A", "web: smart_warning(1)@disk: /dev/sdb"},
 		},
 		{
 			name: "degraded pool",
-			in: FleetInput{Systems: []hub.System{sys}, Pools: []hub.ZfsPool{
+			in: FleetInput{Systems: []hub.System{sys}, Pools: ok([]hub.ZfsPool{
 				{System: sys.ID, Name: "tank", Health: "ONLINE"},
 				{System: sys.ID, Name: "backup", Health: "DEGRADED"},
 				{System: sys.ID, Name: "new", Health: ""},
-			}},
+			})},
 			want: []string{"web: pool_degraded(1)@disk: backup DEGRADED"},
 		},
 		{
 			name: "monitor loss and certs; disabled ignored",
-			in: FleetInput{Systems: []hub.System{sys}, Monitors: []hub.Monitor{
+			in: FleetInput{Systems: []hub.System{sys}, Monitors: ok([]hub.Monitor{
 				{System: sys.ID, Target: "a.com", Enabled: true, Loss1h: 12.4},
 				{System: sys.ID, Target: "b.com", Enabled: true, CertInfo: &hub.CertInfo{Expires: now.Add(-3 * 24 * time.Hour).UnixMilli()}},
 				{System: sys.ID, Target: "c.com", Enabled: true, CertInfo: &hub.CertInfo{Expires: now.Add(9 * 24 * time.Hour).UnixMilli()}},
 				{System: sys.ID, Target: "d.com", Enabled: true, CertInfo: &hub.CertInfo{Expires: now.Add(14 * 24 * time.Hour).UnixMilli()}},
 				{System: sys.ID, Target: "e.com", Enabled: false, Loss1h: 100},
 				{System: sys.ID, Target: "f.com", Enabled: true, CertInfo: &hub.CertInfo{}},
-			}},
+			})},
 			want: []string{
 				"web: monitor_failing(1)@network: a.com 12% loss",
 				"web: cert_expired(1)@network: b.com 3d ago",
@@ -249,13 +237,13 @@ func TestFleetProblems(t *testing.T) {
 		},
 		{
 			name: "exactly 5 names, no overflow note",
-			in: FleetInput{Systems: []hub.System{sys}, Services: []hub.Service{
+			in: FleetInput{Systems: []hub.System{sys}, Services: ok([]hub.Service{
 				{System: sys.ID, Name: "a", State: 2},
 				{System: sys.ID, Name: "b", State: 2},
 				{System: sys.ID, Name: "c", State: 2},
 				{System: sys.ID, Name: "d", State: 2},
 				{System: sys.ID, Name: "e", State: 2},
-			}},
+			})},
 			want: []string{"web: service_failed(5)@services: a, b, c, d, e"},
 		},
 		{
@@ -271,7 +259,7 @@ func TestFleetProblems(t *testing.T) {
 			name: "down system hides its stale structural data",
 			in: FleetInput{
 				Systems:  []hub.System{{ID: sys.ID, Name: "web", Status: "down", Updated: ago(time.Hour)}},
-				Services: []hub.Service{{System: sys.ID, Name: "x", State: 2}},
+				Services: ok([]hub.Service{{System: sys.ID, Name: "x", State: 2}}),
 			},
 			want: []string{"web: status_down(0)@summary: down for 1h"},
 		},
@@ -280,10 +268,7 @@ func TestFleetProblems(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			tt.in.Now = now
-			r, err := Fleet(tt.in, FleetOptions{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := Fleet(tt.in, FleetOptions{})
 			if got := problems(r); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got  %q\nwant %q", got, tt.want)
 			}
@@ -348,10 +333,7 @@ func TestFleetRow(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r, err := Fleet(FleetInput{Now: now, Systems: []hub.System{tt.sys}}, FleetOptions{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := Fleet(FleetInput{Now: now, Systems: []hub.System{tt.sys}}, FleetOptions{})
 			got, err := json.Marshal(r.Systems[0])
 			if err != nil {
 				t.Fatal(err)
@@ -394,10 +376,7 @@ func TestFleetWarnings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r, err := Fleet(FleetInput{Now: now, HubVersion: tt.hub, TokenExpiresAt: tt.expires, Systems: tt.systems}, FleetOptions{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := Fleet(FleetInput{Now: now, HubVersion: tt.hub, TokenExpiresAt: tt.expires, Systems: tt.systems}, FleetOptions{})
 			if !reflect.DeepEqual(r.Warnings, tt.want) {
 				t.Errorf("got %q, want %q", r.Warnings, tt.want)
 			}
@@ -416,7 +395,6 @@ func TestFleetSelection(t *testing.T) {
 		opts       FleetOptions
 		wantRows   []string
 		wantCounts Counts
-		wantErr    bool
 	}{
 		{
 			name: "all", wantRows: []string{"web", "db", "old"},
@@ -427,18 +405,14 @@ func TestFleetSelection(t *testing.T) {
 			wantCounts: Counts{Total: 3, Up: 1, Down: 1, Paused: 1, WithProblems: 2},
 		},
 		{
-			name: "named systems", opts: FleetOptions{Systems: []string{"WEB", "db"}}, wantRows: []string{"web", "db"},
+			// Picking systems by name is resolveAll's job (mcptools TestResolveAll).
+			name: "a subset is counted alone", systems: []hub.System{healthy, broken}, wantRows: []string{"web", "db"},
 			wantCounts: Counts{Total: 2, Up: 1, Down: 1, WithProblems: 1},
 		},
 		{
-			name: "duplicate names counted once", opts: FleetOptions{Systems: []string{"web", "aaaaaaaaaaaaaa1"}},
-			wantRows: []string{"web"}, wantCounts: Counts{Total: 1, Up: 1},
-		},
-		{
-			name: "problems only, none", opts: FleetOptions{Systems: []string{"web"}, ProblemsOnly: true},
+			name: "problems only, none", systems: []hub.System{healthy}, opts: FleetOptions{ProblemsOnly: true},
 			wantRows: []string{}, wantCounts: Counts{Total: 1, Up: 1},
 		},
-		{name: "unknown name", opts: FleetOptions{Systems: []string{"mail"}}, wantErr: true},
 		{
 			name: "pending and an undefined status are counted",
 			systems: []hub.System{
@@ -456,13 +430,7 @@ func TestFleetSelection(t *testing.T) {
 			if tt.systems != nil {
 				systems = tt.systems
 			}
-			r, err := Fleet(FleetInput{Now: now, Systems: systems}, tt.opts)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("err = %v, want error %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				return
-			}
+			r := Fleet(FleetInput{Now: now, Systems: systems}, tt.opts)
 			rows := []string{}
 			for _, row := range r.Systems {
 				rows = append(rows, row.Name)
@@ -474,45 +442,28 @@ func TestFleetSelection(t *testing.T) {
 	}
 }
 
-// load decodes a hub fixture's items.
-func load[T any](t *testing.T, name string) []T {
-	t.Helper()
-	root, err := os.OpenRoot("../hub/testdata")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = root.Close() }()
-	b, err := root.ReadFile(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var p struct {
-		Items []T `json:"items"`
-	}
-	if err := json.Unmarshal(b, &p); err != nil {
-		t.Fatal(err)
-	}
-	return p.Items
-}
-
 // fixtureLastSeen is the newest captured stats row of each system that is
 // not up, as the hub's LastStatsAt returns it; zero when there is none.
-func fixtureLastSeen(t *testing.T, systems []hub.System) map[string]time.Time {
+func fixtureLastSeen(t *testing.T, systems []hub.System) map[string]Read[time.Time] {
 	t.Helper()
-	out := map[string]time.Time{}
+	out := map[string]Read[time.Time]{}
 	for _, s := range systems {
 		if s.Status == "up" {
 			continue
 		}
-		out[s.ID] = time.Time{}
-		for _, r := range load[hub.SystemStats](t, "hub/system_stats_latest_"+s.Name+".json") {
-			if r.Created.After(out[s.ID]) {
-				out[s.ID] = r.Created.Time
+		var newest time.Time
+		for _, r := range hubtest.Load[hub.SystemStats](t, "hub/system_stats_latest_"+s.Name+".json") {
+			if r.Created.After(newest) {
+				newest = r.Created.Time
 			}
 		}
+		out[s.ID] = ok(newest)
 	}
 	return out
 }
+
+// ok is a read that succeeded with v.
+func ok[T any](v T) Read[T] { return Read[T]{Val: v} }
 
 // TestFleetGolden runs the real (sanitised) fixtures through Fleet and
 // compares the exact JSON the model would get. Run with -update to rewrite.
@@ -521,12 +472,12 @@ func TestFleetGolden(t *testing.T) {
 		Now:            captured,
 		HubVersion:     "0.21.1",
 		TokenExpiresAt: captured.Add(10 * 365 * 24 * time.Hour),
-		Systems:        load[hub.System](t, "hub/systems.json"),
-		Services:       load[hub.Service](t, "hub/systemd_services.json"),
-		Containers:     load[hub.Container](t, "hub/containers.json"),
-		Smart:          load[hub.SmartDevice](t, "hub/smart_devices.json"),
-		Pools:          load[hub.ZfsPool](t, "handmade/zfs_pools.json"),
-		Monitors:       load[hub.Monitor](t, "hub/network_monitors.json"),
+		Systems:        hubtest.Load[hub.System](t, "hub/systems.json"),
+		Services:       ok(hubtest.Load[hub.Service](t, "hub/systemd_services.json")),
+		Containers:     ok(hubtest.Load[hub.Container](t, "hub/containers.json")),
+		Smart:          ok(hubtest.Load[hub.SmartDevice](t, "hub/smart_devices.json")),
+		Pools:          ok(hubtest.Load[hub.ZfsPool](t, "handmade/zfs_pools.json")),
+		Monitors:       ok(hubtest.Load[hub.Monitor](t, "hub/network_monitors.json")),
 	}
 	in.LastSeen = fixtureLastSeen(t, in.Systems)
 	tests := []struct {
@@ -539,11 +490,7 @@ func TestFleetGolden(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, err := Fleet(in, tt.opts)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := json.MarshalIndent(r, "", "  ")
+			got, err := json.MarshalIndent(Fleet(in, tt.opts), "", "  ")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -574,15 +521,15 @@ func TestLastSeen(t *testing.T) {
 	tests := []struct {
 		name     string
 		sys      hub.System
-		lastSeen map[string]time.Time
+		lastSeen map[string]Read[time.Time]
 		want     string // fleet row, then the detail core section
 	}{
 		{
-			name: "newest stats row wins over updated", sys: sys, lastSeen: map[string]time.Time{sys.ID: now.Add(-58*time.Hour - 20*time.Minute)},
+			name: "newest stats row wins over updated", sys: sys, lastSeen: map[string]Read[time.Time]{sys.ID: ok(now.Add(-58*time.Hour - 20*time.Minute))},
 			want: `{"name":"web","status":"down","last_seen_ago_s":210000,"problems":[{"code":"status_down","detail":"down for 2d 10h","section":"summary"}]} {"unavailable":"system is down, last seen 2d 10h ago"}`,
 		},
 		{
-			name: "no stats row in 30 days", sys: sys, lastSeen: map[string]time.Time{sys.ID: {}},
+			name: "no stats row in 30 days", sys: sys, lastSeen: map[string]Read[time.Time]{sys.ID: {}},
 			want: `{"name":"web","status":"down","problems":[{"code":"status_down","detail":"down, no data in the last 30 days","section":"summary"}]} {"unavailable":"system is down, no data in the last 30 days"}`,
 		},
 		{
@@ -590,21 +537,18 @@ func TestLastSeen(t *testing.T) {
 			want: `{"name":"web","status":"down","last_seen_ago_s":7200,"problems":[{"code":"status_down","detail":"down for 2h","section":"summary"}]} {"unavailable":"system is down, last seen 2h ago"}`,
 		},
 		{
-			name: "paused uses the stats row too", sys: paused, lastSeen: map[string]time.Time{sys.ID: now.Add(-25 * time.Hour)},
+			name: "paused uses the stats row too", sys: paused, lastSeen: map[string]Read[time.Time]{sys.ID: ok(now.Add(-25 * time.Hour))},
 			want: `{"name":"web","status":"paused","last_seen_ago_s":90000,"problems":[{"code":"status_paused","detail":"monitoring paused","section":"summary"}]} {"unavailable":"system is paused, last seen 1d 1h ago"}`,
 		},
 		{
-			name: "another system's entry is ignored", sys: sys, lastSeen: map[string]time.Time{"otherotherother": {}},
+			name: "another system's entry is ignored", sys: sys, lastSeen: map[string]Read[time.Time]{"otherotherother": {}},
 			want: `{"name":"web","status":"down","last_seen_ago_s":7200,"problems":[{"code":"status_down","detail":"down for 2h","section":"summary"}]} {"unavailable":"system is down, last seen 2h ago"}`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := FleetInput{Now: now, Systems: []hub.System{tt.sys}, LastSeen: tt.lastSeen}
-			f, err := Fleet(in, FleetOptions{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			f := Fleet(in, FleetOptions{})
 			d, err := Detail(DetailInput{FleetInput: in, System: tt.sys}, DetailOptions{Sections: []Section{SectionCore}})
 			if err != nil {
 				t.Fatal(err)
