@@ -1,6 +1,7 @@
 /bin/
 /dist/
 coverage.out
+junit.xml
 .DS_Store
 
 # Tokens belong in the Keychain; never let one reach a commit.

@@ -33,16 +33,21 @@ jobs:
             go.sum
             tools/*.sum
 
-      - run: make coverage
+      - name: Test
+        id: test
+        run: go tool -modfile=tools/gotestsum.mod gotestsum --junitfile junit.xml -- -count=1 -coverprofile=coverage.out ./...
 
-      # Fork PRs get no OIDC token, so they skip the upload.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+      # Test results go up even when tests fail; failures are what they
+      # report. Fork PRs get no OIDC token, so they skip the upload.
+      - name: Upload to Codecov
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         env:
           # The hash is the one Codecov's GPG-signed SHA256SUM lists for this
           # version (key 27034E7FDB850E0BBC2C62FF806BB28AED779869). Re-check
           # the signature before changing either.
           CODECOV_CLI: v11.3.1
           CODECOV_SHA256: ca1d64196d2d34771084afe76ea657d581bf628e31d993ff8e52ea09cc88a56d
+          TESTS: ${{ steps.test.outcome }}
         run: |
           curl -fsSL -o codecov "https://cli.codecov.io/$CODECOV_CLI/linux/codecov"
           echo "$CODECOV_SHA256  codecov" | sha256sum -c -
@@ -50,4 +55,6 @@ jobs:
           token=$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://codecov.io" | jq -r .value)
           echo "::add-mask::$token"
-          CODECOV_TOKEN=$token ./codecov upload-process --disable-search --fail-on-error -f coverage.out
+          upload() { CODECOV_TOKEN=$token ./codecov upload-process --disable-search --plugin noop --fail-on-error "$@"; }
+          upload --report-type test_results -f junit.xml
+          if [ "$TESTS" = success ]; then upload -f coverage.out; fi
