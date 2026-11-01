@@ -65,39 +65,38 @@ func New(capturedAt time.Time) *Sanitiser {
 func (s *Sanitiser) File(kind Kind, data []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
-	var doc any
+	// An object only: anything else would skip sanitising and be written raw.
+	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", kind, err)
+	}
+	if doc == nil {
+		return nil, fmt.Errorf("decode %s: want a JSON object, got null", kind)
 	}
 	if kind == KindInfo {
 		s.info(doc)
 	} else {
-		for _, item := range items(doc) {
+		list, err := items(doc)
+		if err != nil {
+			return nil, fmt.Errorf("decode %s: %w", kind, err)
+		}
+		for _, item := range list {
 			s.record(kind, item)
 		}
 	}
-	out, err := encode(doc)
-	if err != nil {
-		return nil, fmt.Errorf("encode %s: %w", kind, err)
-	}
-	return out, nil
+	return encode(doc), nil
 }
 
 // encode writes compact JSON with one list item per line, so a re-capture
 // diff shows which records changed.
-func encode(doc any) ([]byte, error) {
-	obj, isObj := doc.(map[string]any)
+func encode(obj map[string]any) []byte {
 	list, isList := obj["items"].([]any)
-	if !isObj || !isList {
-		b, err := json.Marshal(doc)
-		return append(b, '\n'), err
+	if !isList {
+		return append(mustMarshal(obj), '\n')
 	}
 	envelope := maps.Clone(obj)
 	delete(envelope, "items")
-	head, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("envelope: %w", err)
-	}
+	head := mustMarshal(envelope)
 	var buf bytes.Buffer
 	buf.Write(head[:len(head)-1]) // drop the closing brace
 	if len(envelope) > 0 {
@@ -105,44 +104,44 @@ func encode(doc any) ([]byte, error) {
 	}
 	buf.WriteString(`"items":[`)
 	for i, it := range list {
-		b, err := json.Marshal(it)
-		if err != nil {
-			return nil, fmt.Errorf("item %d: %w", i, err)
-		}
 		if i > 0 {
 			buf.WriteByte(',')
 		}
 		buf.WriteString("\n")
-		buf.Write(b)
+		buf.Write(mustMarshal(it))
 	}
 	buf.WriteString("\n]}\n")
-	return buf.Bytes(), nil
+	return buf.Bytes()
+}
+
+// mustMarshal encodes a value decoded from JSON (with UseNumber) and edited
+// only with strings, so it cannot fail.
+func mustMarshal(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic("fixtures: re-encoding decoded JSON failed: " + err.Error())
+	}
+	return b
 }
 
 // items returns the records of a list response, or the document itself.
-func items(doc any) []map[string]any {
-	obj, ok := doc.(map[string]any)
-	if !ok {
-		return nil
-	}
+func items(obj map[string]any) ([]map[string]any, error) {
 	list, ok := obj["items"].([]any)
 	if !ok {
-		return []map[string]any{obj}
+		return []map[string]any{obj}, nil
 	}
-	var out []map[string]any
-	for _, it := range list {
-		if m, ok := it.(map[string]any); ok {
-			out = append(out, m)
+	out := make([]map[string]any, 0, len(list))
+	for i, it := range list {
+		m, ok := it.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("item %d is not an object", i)
 		}
+		out = append(out, m)
 	}
-	return out
+	return out, nil
 }
 
-func (s *Sanitiser) info(doc any) {
-	obj, ok := doc.(map[string]any)
-	if !ok {
-		return
-	}
+func (s *Sanitiser) info(obj map[string]any) {
 	if key, ok := obj["key"].(string); ok && key != "" {
 		s.replaced[key] = true
 		obj["key"] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFIXTUREFIXTUREFIXTUREFIXTUREFIXTUREFIXTUREFIX"
@@ -274,8 +273,9 @@ func (s *Sanitiser) hostname(systemID, orig string) string {
 	}
 	name, ok := s.systems[systemID]
 	if !ok {
-		name = pick(systemPool, len(systemPool)+s.next["hostname"]+1, "host")
+		// Own prefix: system pseudonyms past the pool are host-N too.
 		s.next["hostname"]++
+		name = "orphan-" + strconv.Itoa(s.next["hostname"])
 	}
 	if strings.HasSuffix(orig, ".local") {
 		name += ".local"
@@ -316,14 +316,8 @@ func (s *Sanitiser) target(orig string) string {
 var ssidPool = []string{"home-5g", "home", "office"}
 
 func (s *Sanitiser) wifi(info any) {
-	m, ok := info.(map[string]any)
-	if !ok {
-		return
-	}
-	wf, ok := m["wf"].(map[string]any)
-	if !ok {
-		return
-	}
+	m, _ := info.(map[string]any) // a nil map reads and ranges as empty
+	wf, _ := m["wf"].(map[string]any)
 	for _, v := range wf {
 		if iface, ok := v.(map[string]any); ok {
 			if ssid := str(iface["s"]); ssid != "" {

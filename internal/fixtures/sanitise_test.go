@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,20 @@ type file struct {
 }
 
 // decode parses JSON with numbers kept as json.Number, so values compare exactly.
+// records decodes a sanitised document and returns its records.
+func records(t *testing.T, doc []byte) []map[string]any {
+	t.Helper()
+	obj, ok := decode(t, string(doc)).(map[string]any)
+	if !ok {
+		t.Fatalf("not an object: %s", doc)
+	}
+	out, err := items(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 func decode(t *testing.T, s string) any {
 	t.Helper()
 	dec := json.NewDecoder(strings.NewReader(s))
@@ -78,6 +93,12 @@ func TestFileOutput(t *testing.T) {
 				{KindSystemDetails, `{"items":[{"id":"abcdefghij12345","system":"abcdefghij12345","hostname":"Alices-Laptop"}]}`},
 			},
 			want: `{"items":[{"id":"f00000000000001","system":"f00000000000001","hostname":"alpha"}]}`,
+		},
+		{
+			// "host-1" would collide with the ninth system's pseudonym.
+			name:  "system_details: hostname of a system not seen yet gets its own name",
+			files: []file{{KindSystemDetails, `{"items":[{"id":"zzz","system":"zzz","hostname":"corp-db"}]}`}},
+			want:  `{"items":[{"id":"f01","system":"f01","hostname":"orphan-1"}]}`,
 		},
 		{
 			name: "containers: known kept, unknown stand-in, local digest faked",
@@ -206,20 +227,27 @@ func TestFileWritesOneRecordPerLine(t *testing.T) {
 	}
 }
 
+// A document the sanitiser cannot walk must fail, not pass through raw.
 func TestFileRejectsBadJSON(t *testing.T) {
 	tests := []struct {
 		name string
+		kind Kind
 		in   string
 	}{
-		{name: "empty", in: ""},
-		{name: "truncated", in: `{"items":[`},
-		{name: "not json", in: "<html>"},
+		{name: "empty", kind: KindSystems, in: ""},
+		{name: "truncated", kind: KindSystems, in: `{"items":[`},
+		{name: "not json", kind: KindSystems, in: "<html>"},
+		{name: "top-level array", kind: KindSystems, in: `[{"id":"alpha-box","name":"alpha-box"}]`},
+		{name: "top-level string", kind: KindSystems, in: `"alpha-box"`},
+		{name: "null", kind: KindSystems, in: `null`},
+		{name: "list item not an object", kind: KindSystems, in: `{"items":["alpha-box"]}`},
+		{name: "info as an array", kind: KindInfo, in: `[{"key":"ssh-ed25519 AAAArealkey"}]`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := New(captured).File(KindSystems, []byte(tt.in)); err == nil {
-				t.Error("want an error")
+			if out, err := New(captured).File(tt.kind, []byte(tt.in)); err == nil {
+				t.Errorf("want an error, got output %s", out)
 			}
 		})
 	}
@@ -349,8 +377,8 @@ func TestSameOriginalSamePseudonym(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			first := items(decode(t, string(a)))[0]["id"]
-			ref := items(decode(t, string(b)))[0]
+			first := records(t, a)[0]["id"]
+			ref := records(t, b)[0]
 			if ref["system"] != first && ref["monitor"] != first {
 				t.Errorf("reference %v does not match first id %v", ref, first)
 			}
@@ -359,4 +387,115 @@ func TestSameOriginalSamePseudonym(t *testing.T) {
 			}
 		})
 	}
+}
+
+// knownName keeps a container name only if every non-number token is a known word.
+func TestKnownName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "known word", in: "redis", want: true},
+		{name: "known word with a number", in: "redis-1", want: true},
+		{name: "underscore separator", in: "postgres_2", want: true},
+		{name: "unknown token after a number leaks nothing", in: "redis-1-corpname", want: false},
+		{name: "unknown word", in: "corp-worker", want: false},
+		{name: "numbers only", in: "1-2", want: true},
+		{name: "empty", in: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := knownName(tt.in); got != tt.want {
+				t.Fatalf("knownName(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPick(t *testing.T) {
+	pool := []string{"a", "b", "c"}
+	tests := []struct {
+		name string
+		n    int
+		want string
+	}{
+		{name: "first", n: 1, want: "a"},
+		{name: "last in the pool", n: 3, want: "c"},
+		{name: "first past the pool", n: 4, want: "x-1"},
+		{name: "further past", n: 10, want: "x-7"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pick(pool, tt.n, "x"); got != tt.want {
+				t.Fatalf("pick(%d) = %q, want %q", tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+// fake keeps an id's length and case, so a fixture still parses as an id.
+func TestFake(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string // faked in order by one sanitiser; want is the last
+		want string
+	}{
+		{name: "lower case keeps length", in: []string{"abcdefghij12345"}, want: "f00000000000001"},
+		{name: "upper case serial stays upper", in: []string{"S3ZBNX0K123456"}, want: "F0000000000001"},
+		{name: "empty stays empty", in: []string{""}, want: ""},
+		{name: "one character id", in: []string{"a"}, want: "1"},
+		{name: "same id twice, same fake", in: []string{"abc", "abc"}, want: "f01"},
+		{name: "second id", in: []string{"abc", "abd"}, want: "f02"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := New(captured)
+			got := ""
+			for _, id := range tt.in {
+				got = s.fake("id", id)
+			}
+			if got != tt.want {
+				t.Fatalf("fake = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitiserNames(t *testing.T) {
+	t.Run("system names follow the systems file", func(t *testing.T) {
+		s := New(captured)
+		if _, err := s.File(KindSystems, []byte(systemsIn)); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.SystemName("abcdefghij12345"); got != "alpha" {
+			t.Errorf("SystemName = %q, want alpha", got)
+		}
+		if got := s.SystemName("unknown"); got != "" {
+			t.Errorf("SystemName(unknown) = %q, want empty", got)
+		}
+	})
+	t.Run("empty hostname stays empty", func(t *testing.T) {
+		if got := New(captured).hostname("abc", ""); got != "" {
+			t.Errorf("hostname = %q, want empty", got)
+		}
+	})
+	t.Run("containers past the stand-in pool get app-N and a matching image", func(t *testing.T) {
+		s := New(captured)
+		var name string
+		for i := range len(appPool) + 1 {
+			name = s.container("corp-svc-" + strconv.Itoa(i) + "x")
+		}
+		if name != "app-1" {
+			t.Fatalf("container = %q, want app-1", name)
+		}
+		if img := s.image("corp-svc-"+strconv.Itoa(len(appPool))+"x", "registry.corp/svc:9"); img != "example/app-1:latest" {
+			t.Errorf("image = %q, want example/app-1:latest", img)
+		}
+	})
+	t.Run("non-id values in an id field are left alone", func(t *testing.T) {
+		if got := New(captured).ids(nil); got != nil {
+			t.Errorf("ids(nil) = %v, want nil", got)
+		}
+	})
 }
