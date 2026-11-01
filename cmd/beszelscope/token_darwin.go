@@ -39,15 +39,12 @@ func systemKeychain() tokenStore {
 // keychainStore adapts the Keychain to tokenStore.
 type keychainStore struct{ *keychain.Keychain }
 
-func (k keychainStore) Get(ctx context.Context, account string) (string, bool, error) {
+func (k keychainStore) Get(ctx context.Context, account string) (string, error) {
 	tok, err := k.Keychain.Get(ctx, account)
 	if errors.Is(err, keychain.ErrNotFound) {
-		return "", false, nil
+		return "", nil
 	}
-	if err != nil {
-		return "", false, err //nolint:wrapcheck // storedToken adds the context
-	}
-	return tok, true, nil
+	return tok, err //nolint:wrapcheck // storedToken adds the context
 }
 
 func (keychainStore) Where(account string) string {
@@ -172,7 +169,7 @@ func tokenList(ctx context.Context, stdout io.Writer, tokens tokenStore) error {
 	now := time.Now()
 	for _, host := range hosts {
 		line := "unreadable: "
-		tok, _, err := tokens.Get(ctx, host) // listed, so found
+		tok, err := tokens.Get(ctx, host)
 		if err == nil {
 			var info config.TokenInfo
 			if info, err = config.ParseToken(tok); err == nil {

@@ -26,15 +26,21 @@ import (
 // makeToken builds an unsigned PocketBase user token that expires at exp.
 func makeToken(t *testing.T, exp time.Time) string {
 	t.Helper()
-	claims, err := json.Marshal(map[string]any{
+	return jwt(t, map[string]any{
 		"id": "testuser0000001", "type": "auth", "collectionId": "_pb_users_auth_",
 		"refreshable": false, "exp": exp.Unix(),
 	})
+}
+
+// jwt builds an unsigned token carrying claims.
+func jwt(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	payload, err := json.Marshal(claims)
 	if err != nil {
 		t.Fatal(err)
 	}
 	enc := base64.RawURLEncoding
-	return enc.EncodeToString([]byte(`{"alg":"HS256"}`)) + "." + enc.EncodeToString(claims) + ".c2ln"
+	return enc.EncodeToString([]byte(`{"alg":"HS256"}`)) + "." + enc.EncodeToString(payload) + ".c2ln"
 }
 
 // fakeHub answers /api/beszel/info with status; 0 closes the server first.
@@ -85,12 +91,11 @@ type fakeStore struct {
 	err    error
 }
 
-func (s *fakeStore) Get(_ context.Context, account string) (string, bool, error) {
+func (s *fakeStore) Get(_ context.Context, account string) (string, error) {
 	if s.err != nil {
-		return "", false, s.err
+		return "", s.err
 	}
-	tok, ok := s.tokens[account]
-	return tok, ok, nil
+	return s.tokens[account], nil
 }
 
 func (s *fakeStore) Where(account string) string {

@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"io"
 	"maps"
@@ -250,14 +248,9 @@ func TestTokenDispatch(t *testing.T) {
 
 func superuserToken(t *testing.T) string {
 	t.Helper()
-	claims, err := json.Marshal(map[string]any{
+	return jwt(t, map[string]any{
 		"id": "su", "type": "auth", "collectionId": "pbc_3142635823", "exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc := base64.RawURLEncoding
-	return enc.EncodeToString([]byte(`{"alg":"HS256"}`)) + "." + enc.EncodeToString(claims) + ".c2ln"
 }
 
 // runToken runs `beszelscope token args...`.
@@ -270,14 +263,13 @@ func runToken(t *testing.T, args []string, env map[string]string, stdin string, 
 // passes every other failure on as an error.
 func TestKeychainStoreGet(t *testing.T) {
 	tests := []struct {
-		name      string
-		res       keychain.Result
-		runErr    error
-		want      string
-		wantFound bool
-		wantErr   bool
+		name    string
+		res     keychain.Result
+		runErr  error
+		want    string
+		wantErr bool
 	}{
-		{name: "stored", res: keychain.Result{Stdout: "a.b.c\n"}, want: "a.b.c", wantFound: true},
+		{name: "stored", res: keychain.Result{Stdout: "a.b.c\n"}, want: "a.b.c"},
 		{name: "not found", res: keychain.Result{Code: 44, Stderr: "could not be found"}},
 		{name: "locked", res: keychain.Result{Code: 51, Stderr: "user interaction is not allowed"}, wantErr: true},
 		{name: "did not run", runErr: errors.New("killed"), wantErr: true},
@@ -285,9 +277,9 @@ func TestKeychainStoreGet(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			run := func(context.Context, string, ...string) (keychain.Result, error) { return tt.res, tt.runErr }
-			got, found, err := keychainStore{keychain.New(run)}.Get(t.Context(), "beszel.example.com")
-			if (err != nil) != tt.wantErr || got != tt.want || found != tt.wantFound {
-				t.Fatalf("Get = %q, %v, %v; want %q, %v, error %v", got, found, err, tt.want, tt.wantFound, tt.wantErr)
+			got, err := keychainStore{keychain.New(run)}.Get(t.Context(), "beszel.example.com")
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Fatalf("Get = %q, %v; want %q, error %v", got, err, tt.want, tt.wantErr)
 			}
 		})
 	}

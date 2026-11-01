@@ -31,7 +31,7 @@ func main() {
 // tokenStore holds hub tokens by hub host: the macOS Keychain
 // (keychainStore), or nil where there is none (systemKeychain).
 type tokenStore interface {
-	Get(ctx context.Context, account string) (token string, found bool, err error)
+	Get(ctx context.Context, account string) (string, error) // "" when there is none
 	Set(ctx context.Context, account, token string) error
 	Delete(ctx context.Context, account string) error
 	List(ctx context.Context) ([]string, error)

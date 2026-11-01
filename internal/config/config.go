@@ -14,17 +14,20 @@ import (
 	"github.com/caarlos0/env/v11"
 )
 
-// Token sources for [Config.TokenSource].
+// TokenSource is where the hub token came from.
+type TokenSource string
+
+// The token sources.
 const (
-	SourceKeychain = "keychain"
-	SourceEnv      = "env"
+	SourceKeychain TokenSource = "keychain"
+	SourceEnv      TokenSource = "env"
 )
 
 // Config is the validated startup configuration.
 type Config struct {
 	HubURL         *url.URL // no trailing slash; may include a base path
 	Token          Secret
-	TokenSource    string    // SourceKeychain or SourceEnv
+	TokenSource    TokenSource
 	TokenUserID    string    // the token's "id" claim
 	TokenExpiresAt time.Time // checked later; an expired token still parses
 	LogLevel       slog.Level
@@ -144,7 +147,7 @@ func parseLogLevel(v string) (slog.Level, error) {
 	}
 }
 
-func pickToken(keychain, envToken string) (tok, source string, err error) {
+func pickToken(keychain, envToken string) (tok string, source TokenSource, err error) {
 	switch {
 	case keychain != "" && envToken != "":
 		return "", "", errors.New("token set in both the Keychain and BESZELSCOPE_TOKEN; keep exactly one")

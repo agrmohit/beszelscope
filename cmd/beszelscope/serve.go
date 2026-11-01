@@ -67,11 +67,11 @@ func storedToken(ctx context.Context, tokens tokenStore, rawURL string) (string,
 	if tokens == nil || err != nil || u.Hostname() == "" {
 		return "", nil
 	}
-	tok, _, err := tokens.Get(ctx, u.Hostname())
+	tok, err := tokens.Get(ctx, u.Hostname())
 	if err != nil {
 		return "", fmt.Errorf("keychain: %w", err)
 	}
-	return tok, nil // "" when not found
+	return tok, nil
 }
 
 // newHubClient returns the hub client. Each request gets an otelhttp span, a
@@ -101,7 +101,7 @@ func startup(ctx context.Context, tracer trace.Tracer, log *slog.Logger, h *hub.
 	ctx, span := tracer.Start(ctx, "beszelscope.startup")
 	defer span.End()
 	span.SetAttributes(
-		attribute.String("beszelscope.token.source", cfg.TokenSource),
+		attribute.String("beszelscope.token.source", string(cfg.TokenSource)),
 		attribute.String("beszelscope.token.expires_at", cfg.TokenExpiresAt.UTC().Format(time.RFC3339)),
 	)
 	for _, w := range report.TokenWarning(now, cfg.TokenExpiresAt) {
@@ -118,7 +118,7 @@ func startup(ctx context.Context, tracer trace.Tracer, log *slog.Logger, h *hub.
 	span.SetAttributes(attribute.String("beszel.hub.version", info.Version))
 	log.InfoContext(ctx, "startup.ready",
 		slog.String("version", version), slog.String("hub_version", info.Version),
-		slog.String("token_source", cfg.TokenSource), slog.Time("token_expires_at", cfg.TokenExpiresAt))
+		slog.String("token_source", string(cfg.TokenSource)), slog.Time("token_expires_at", cfg.TokenExpiresAt))
 	return info.Version
 }
 

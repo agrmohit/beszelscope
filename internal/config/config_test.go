@@ -42,9 +42,11 @@ func usersToken(t *testing.T) string {
 
 // parsed is the comparable view of a Config used by the table below.
 type parsed struct {
-	url, source, userID string
-	expires             time.Time
-	level               slog.Level
+	url     string
+	source  TokenSource
+	userID  string
+	expires time.Time
+	level   slog.Level
 }
 
 func TestParseAccepts(t *testing.T) {
