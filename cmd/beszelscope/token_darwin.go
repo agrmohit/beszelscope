@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"maps"
 	"net/url"
 	"os"
@@ -20,33 +19,60 @@ import (
 	"github.com/agrmohit/beszelscope/internal/config"
 )
 
+// platformUsage is the token line of the top-level help.
+const platformUsage = "  beszelscope token ...      manage the hub token in the Keychain; see token --help\n"
+
 const keychainHelp = `Usage:
   beszelscope token set      store the hub token in the Keychain, from a pipe or a prompt
-  beszelscope token status   show the token's source and expiry, and check it with the hub
   beszelscope token list     list the hubs that have a stored token
   beszelscope token delete   delete the hub token from the Keychain
 
-set, status and delete act on the hub in BESZELSCOPE_URL. No command prints a token.
+set and delete act on the hub in BESZELSCOPE_URL. No command prints a token.
+To check the token with the hub, run beszelscope check.
 `
 
-// quiet drops the hub client's request logs: token commands report to the
-// terminal in plain words, not as JSON log lines.
-var quiet = slog.New(slog.DiscardHandler)
+// systemKeychain is the macOS Keychain, through /usr/bin/security.
+func systemKeychain() tokenStore {
+	return keychainStore{keychain.New(keychain.Security)}
+}
 
-// tokenCmd runs `beszelscope token ...`. tokens is nil off macOS.
+// keychainStore adapts the Keychain to tokenStore.
+type keychainStore struct{ *keychain.Keychain }
+
+func (k keychainStore) Get(ctx context.Context, account string) (string, bool, error) {
+	tok, err := k.Keychain.Get(ctx, account)
+	if errors.Is(err, keychain.ErrNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err //nolint:wrapcheck // storedToken adds the context
+	}
+	return tok, true, nil
+}
+
+func (keychainStore) Where(account string) string {
+	return "Keychain (service " + keychain.Service + ", account " + account + ")"
+}
+
+// tokenCmd runs `beszelscope token ...`. Help goes to stdout; errors are
+// returned for main to print.
 func tokenCmd(ctx context.Context, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer, tokens tokenStore) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
-		_, _ = io.WriteString(stderr, keychainHelp)
+		_, _ = io.WriteString(stdout, keychainHelp)
 		return nil
 	}
-	if tokens == nil {
-		return errors.New("token commands need the macOS Keychain; on this system set BESZELSCOPE_TOKEN instead")
-	}
 	cmd, rest := args[0], args[1:]
+	switch cmd {
+	case "set", "list", "delete":
+	case "status":
+		return errors.New("token status is now beszelscope check")
+	default:
+		return fmt.Errorf("unknown token command %q; see beszelscope token --help", cmd)
+	}
 	fs := flag.NewFlagSet("token "+cmd, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { _, _ = io.WriteString(stderr, keychainHelp) }
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(rest); errors.Is(err, flag.ErrHelp) {
+		_, _ = io.WriteString(stdout, keychainHelp)
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("token %s: %w", cmd, err)
@@ -58,14 +84,10 @@ func tokenCmd(ctx context.Context, args []string, env map[string]string, stdin i
 	switch cmd {
 	case "set":
 		return tokenSet(ctx, env, stdin, stdout, stderr, tokens, isTerminal(stdin))
-	case "status":
-		return tokenStatus(ctx, env, stdout, tokens)
 	case "list":
 		return tokenList(ctx, stdout, tokens)
-	case "delete":
-		return tokenDelete(ctx, env, stdout, tokens)
 	default:
-		return fmt.Errorf("unknown token command %q; see beszelscope token --help", cmd)
+		return tokenDelete(ctx, env, stdout, tokens)
 	}
 }
 
@@ -138,31 +160,6 @@ func isTerminal(r io.Reader) bool {
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
 }
 
-func tokenStatus(ctx context.Context, env map[string]string, stdout io.Writer, tokens tokenStore) error {
-	stored, err := storedToken(ctx, tokens, env["BESZELSCOPE_URL"])
-	if err != nil {
-		return err
-	}
-	cfg, err := config.Parse(env, stored)
-	if err != nil {
-		return err
-	}
-	source := "BESZELSCOPE_TOKEN"
-	if cfg.TokenSource == config.SourceKeychain {
-		source = "Keychain (service " + keychain.Service + ", account " + cfg.HubURL.Hostname() + ")"
-	}
-	_, _ = fmt.Fprintf(stdout, "hub      %s\nsource   %s\nuser     %s\ntoken    %s\n",
-		cfg.HubURL, source, cfg.TokenUserID, expiry(time.Now(), cfg.TokenExpiresAt))
-
-	info, err := newHubClient(cfg, noop.NewTracerProvider(), quiet).Info(ctx)
-	if err != nil {
-		_, _ = fmt.Fprintf(stdout, "check    failed: %v\n", err)
-		return errors.New("the hub check failed")
-	}
-	_, _ = fmt.Fprintf(stdout, "check    ok, Beszel %s\n", info.Version)
-	return nil
-}
-
 func tokenList(ctx context.Context, stdout io.Writer, tokens tokenStore) error {
 	hosts, err := tokens.List(ctx)
 	if err != nil {
@@ -175,7 +172,7 @@ func tokenList(ctx context.Context, stdout io.Writer, tokens tokenStore) error {
 	now := time.Now()
 	for _, host := range hosts {
 		line := "unreadable: "
-		tok, err := tokens.Get(ctx, host)
+		tok, _, err := tokens.Get(ctx, host) // listed, so found
 		if err == nil {
 			var info config.TokenInfo
 			if info, err = config.ParseToken(tok); err == nil {
@@ -203,14 +200,4 @@ func tokenDelete(ctx context.Context, env map[string]string, stdout io.Writer, t
 	}
 	_, _ = fmt.Fprintf(stdout, "deleted the token for %s\n", host)
 	return nil
-}
-
-// expiry renders when a token expires, with whole days to go or gone.
-func expiry(now, at time.Time) string {
-	days := int(at.Sub(now).Hours() / 24)
-	stamp := at.UTC().Format(time.RFC3339)
-	if !at.After(now) {
-		return fmt.Sprintf("expired %s (%d days ago)", stamp, -days)
-	}
-	return fmt.Sprintf("expires %s (%d days left)", stamp, days)
 }

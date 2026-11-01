@@ -10,6 +10,8 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -83,14 +85,16 @@ type fakeStore struct {
 	err    error
 }
 
-func (s *fakeStore) Get(_ context.Context, account string) (string, error) {
+func (s *fakeStore) Get(_ context.Context, account string) (string, bool, error) {
 	if s.err != nil {
-		return "", s.err
+		return "", false, s.err
 	}
-	if tok, ok := s.tokens[account]; ok {
-		return tok, nil
-	}
-	return "", keychain.ErrNotFound
+	tok, ok := s.tokens[account]
+	return tok, ok, nil
+}
+
+func (s *fakeStore) Where(account string) string {
+	return "Keychain (service beszelscope, account " + account + ")"
 }
 
 func (s *fakeStore) Set(_ context.Context, account, token string) error {
@@ -150,6 +154,9 @@ func TestRunErrors(t *testing.T) {
 	}{
 		{name: "unknown command", args: []string{"serve"}, wantErr: `unknown command "serve"`},
 		{name: "unknown flag", args: []string{"-x"}, wantErr: `unknown command "-x"`},
+		{name: "version with an argument", args: []string{"version", "extra"}, wantErr: `version takes no arguments, got ["extra"]`},
+		{name: "--version with an argument", args: []string{"--version", "-x"}, wantErr: "--version takes no arguments"},
+		{name: "help with an argument", args: []string{"help", "token"}, wantErr: `help takes no arguments, got ["token"]`},
 		{name: "no URL", environ: []string{"BESZELSCOPE_TOKEN=" + good}, wantErr: "BESZELSCOPE_URL"},
 		{name: "no token anywhere", environ: []string{"BESZELSCOPE_URL=" + url}, store: &fakeStore{}, wantErr: "no token: add one"},
 		{name: "no token, no keychain", environ: []string{"BESZELSCOPE_URL=" + url}, wantErr: "no token: add one"},
@@ -397,6 +404,61 @@ func TestServeStops(t *testing.T) {
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatal("run did not return")
+			}
+		})
+	}
+}
+
+func TestBuildVersion(t *testing.T) {
+	mod := func(v string) *debug.BuildInfo { return &debug.BuildInfo{Main: debug.Module{Version: v}} }
+	tests := []struct {
+		name   string
+		ldflag string
+		info   *debug.BuildInfo
+		want   string
+	}{
+		{name: "make build stamps the tag", ldflag: "v0.1.0", info: mod("(devel)"), want: "v0.1.0"},
+		{name: "stamp wins over the module version", ldflag: "v0.2.0-dirty", info: mod("v0.1.0"), want: "v0.2.0-dirty"},
+		{name: "go install of a tag", ldflag: "dev", info: mod("v0.1.0"), want: "v0.1.0"},
+		{name: "go install of a commit", ldflag: "dev", info: mod("v0.1.1-0.20261101000000-863c3243122f"), want: "v0.1.1-0.20261101000000-863c3243122f"},
+		{name: "go build in a checkout", ldflag: "dev", info: mod("(devel)"), want: "dev"},
+		{name: "empty module version", ldflag: "dev", info: mod(""), want: "dev"},
+		{name: "no build info", ldflag: "dev", info: nil, want: "dev"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildVersion(tt.ldflag, tt.info); got != tt.want {
+				t.Fatalf("buildVersion(%q) = %q, want %q", tt.ldflag, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVersionLine(t *testing.T) {
+	info := func(settings ...string) *debug.BuildInfo {
+		bi := &debug.BuildInfo{GoVersion: "go1.27.3"}
+		for i := 0; i+1 < len(settings); i += 2 {
+			bi.Settings = append(bi.Settings, debug.BuildSetting{Key: settings[i], Value: settings[i+1]})
+		}
+		return bi
+	}
+	platform := " go1.27.3 " + runtime.GOOS + "/" + runtime.GOARCH
+	tests := []struct {
+		name string
+		info *debug.BuildInfo
+		want string
+	}{
+		{name: "no build info", info: nil, want: "beszelscope dev"},
+		{name: "no VCS stamp", info: info(), want: "beszelscope dev" + platform},
+		{name: "full revision cut to 12", info: info("vcs.revision", "863c3243122f551d6852d6b5f1d7553433955395"), want: "beszelscope dev (863c3243122f)" + platform},
+		{name: "short revision kept", info: info("vcs.revision", "abc123"), want: "beszelscope dev (abc123)" + platform},
+		{name: "modified tree", info: info("vcs.revision", "abc123", "vcs.modified", "true"), want: "beszelscope dev (abc123, modified)" + platform},
+		{name: "clean tree says nothing", info: info("vcs.revision", "abc123", "vcs.modified", "false"), want: "beszelscope dev (abc123)" + platform},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := versionLine(tt.info); got != tt.want {
+				t.Fatalf("versionLine = %q, want %q", got, tt.want)
 			}
 		})
 	}

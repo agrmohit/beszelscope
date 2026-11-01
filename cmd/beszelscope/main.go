@@ -12,13 +12,13 @@ import (
 	"runtime/debug"
 	"strings"
 	"syscall"
-
-	"github.com/agrmohit/beszelscope/cmd/internal/keychain"
 )
 
 var version = "dev" // set by make build
 
 func main() {
+	info, _ := debug.ReadBuildInfo()
+	version = buildVersion(version, info)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	err := run(ctx, os.Args[1:], os.Environ(), os.Stdin, os.Stdout, os.Stderr, systemKeychain())
 	stop()
@@ -28,21 +28,14 @@ func main() {
 	}
 }
 
-// tokenStore holds hub tokens by hub host. *keychain.Keychain is the real one.
+// tokenStore holds hub tokens by hub host: the macOS Keychain
+// (keychainStore), or nil where there is none (systemKeychain).
 type tokenStore interface {
-	Get(ctx context.Context, account string) (string, error)
+	Get(ctx context.Context, account string) (token string, found bool, err error)
 	Set(ctx context.Context, account, token string) error
 	Delete(ctx context.Context, account string) error
 	List(ctx context.Context) ([]string, error)
-}
-
-// systemKeychain returns the macOS Keychain, or nil elsewhere: other systems
-// take the token from BESZELSCOPE_TOKEN only.
-func systemKeychain() tokenStore {
-	if runtime.GOOS != "darwin" {
-		return nil
-	}
-	return keychain.New(keychain.Security)
+	Where(account string) string // names the item, for check
 }
 
 // run is the whole program. environ is in os.Environ form; tokens is nil
@@ -52,25 +45,41 @@ func run(ctx context.Context, args, environ []string, stdin io.Reader, stdout, s
 		return serve(ctx, envMap(environ), stdin, stdout, stderr, tokens)
 	}
 	switch args[0] {
+	case "check":
+		return checkCmd(ctx, args[1:], envMap(environ), stdout, tokens)
 	case "token":
 		return tokenCmd(ctx, args[1:], envMap(environ), stdin, stdout, stderr, tokens)
-	case "version":
-		_, _ = io.WriteString(stdout, versionLine()+"\n")
+	case "version", "--version":
+		if len(args) > 1 {
+			return fmt.Errorf("%s takes no arguments, got %q", args[0], args[1:])
+		}
+		info, _ := debug.ReadBuildInfo()
+		_, _ = io.WriteString(stdout, versionLine(info)+"\n")
 		return nil
 	case "-h", "--help", "help":
-		_, _ = io.WriteString(stderr, usage)
+		if len(args) > 1 {
+			return fmt.Errorf("%s takes no arguments, got %q", args[0], args[1:])
+		}
+		_, _ = io.WriteString(stdout, usageHead+platformUsage+usageTail)
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q; see beszelscope --help", args[0])
+		return errUnknownCommand(args[0])
 	}
 }
 
-const usage = `beszelscope is a read-only MCP server for a Beszel hub.
+func errUnknownCommand(name string) error {
+	return fmt.Errorf("unknown command %q; see beszelscope --help", name)
+}
+
+// The help is split so platformUsage, set per OS, sits between the parts.
+const usageHead = `beszelscope is a read-only MCP server for a Beszel hub.
 
 Usage:
   beszelscope                serve MCP over stdin and stdout
-  beszelscope token ...      manage the hub token in the Keychain (macOS); see token --help
-  beszelscope version        print the version
+  beszelscope check          show the hub and token, and check them with the hub
+`
+
+const usageTail = `  beszelscope version        print the version (also --version)
 
 Environment:
   BESZELSCOPE_URL                  hub URL, required
@@ -81,10 +90,9 @@ Environment:
 `
 
 // versionLine is the version with the commit and toolchain it was built from.
-func versionLine() string {
+func versionLine(info *debug.BuildInfo) string {
 	line := "beszelscope " + version
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
+	if info == nil {
 		return line
 	}
 	settings := map[string]string{}
@@ -109,4 +117,16 @@ func envMap(environ []string) map[string]string {
 		}
 	}
 	return m
+}
+
+// buildVersion is the stamped version, or the module version for a
+// `go install ...@v0.1.0` build, which has no ldflags stamp.
+func buildVersion(ldflag string, info *debug.BuildInfo) string {
+	if ldflag != "dev" || info == nil {
+		return ldflag
+	}
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	return ldflag
 }

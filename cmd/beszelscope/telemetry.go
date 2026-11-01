@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,7 +25,7 @@ import (
 type telemetry struct {
 	tracer   trace.TracerProvider
 	logs     slog.Handler // nil when export is off
-	warning  error        // a resource detector failed; export still works
+	warning  error        // resource detection was incomplete; export still works
 	shutdown []func(context.Context) error
 }
 
@@ -50,13 +49,9 @@ func newTelemetry(ctx context.Context, env map[string]string) (*telemetry, error
 		resource.WithAttributes(semconv.ServiceName("beszelscope"), semconv.ServiceVersion(version)),
 		resource.WithFromEnv(), // last, so OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES win
 	)
-	var warning error
-	if errors.Is(err, resource.ErrPartialResource) {
-		warning, err = err, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("otel resource: %w", err)
-	}
+	// resource.New always returns a usable resource; an error only means some
+	// attributes are missing, which must not stop the server.
+	warning := err
 
 	spans, err := otlptracehttp.New(ctx)
 	if err != nil {

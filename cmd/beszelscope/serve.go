@@ -17,7 +17,6 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/agrmohit/beszelscope/cmd/internal/keychain"
 	"github.com/agrmohit/beszelscope/internal/config"
 	"github.com/agrmohit/beszelscope/internal/hub"
 	"github.com/agrmohit/beszelscope/internal/mcptools"
@@ -68,14 +67,11 @@ func storedToken(ctx context.Context, tokens tokenStore, rawURL string) (string,
 	if tokens == nil || err != nil || u.Hostname() == "" {
 		return "", nil
 	}
-	tok, err := tokens.Get(ctx, u.Hostname())
-	if errors.Is(err, keychain.ErrNotFound) {
-		return "", nil
-	}
+	tok, _, err := tokens.Get(ctx, u.Hostname())
 	if err != nil {
 		return "", fmt.Errorf("keychain: %w", err)
 	}
-	return tok, nil
+	return tok, nil // "" when not found
 }
 
 // newHubClient returns the hub client. Each request gets an otelhttp span, a

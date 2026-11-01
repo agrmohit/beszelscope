@@ -2,79 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
+
+	"github.com/agrmohit/beszelscope/cmd/internal/keychain"
 )
-
-func superuserToken(t *testing.T) string {
-	t.Helper()
-	claims, err := json.Marshal(map[string]any{
-		"id": "su", "type": "auth", "collectionId": "pbc_3142635823", "exp": time.Now().Add(time.Hour).Unix(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc := base64.RawURLEncoding
-	return enc.EncodeToString([]byte(`{"alg":"HS256"}`)) + "." + enc.EncodeToString(claims) + ".c2ln"
-}
-
-// result is what one token command left behind.
-type result struct {
-	err            error
-	stdout, stderr string
-	stored         map[string]string
-}
-
-// check fails the test unless r matches: wantErr "" means no error, and
-// every want string must appear in its stream.
-func (r result) check(t *testing.T, wantErr string, wantOut, wantErrOut []string) {
-	t.Helper()
-	switch {
-	case wantErr == "" && r.err != nil:
-		t.Fatalf("err = %v, want nil\nstdout: %s\nstderr: %s", r.err, r.stdout, r.stderr)
-	case wantErr != "" && (r.err == nil || !strings.Contains(r.err.Error(), wantErr)):
-		t.Fatalf("err = %v, want it to contain %q", r.err, wantErr)
-	}
-	for _, s := range wantOut {
-		if !strings.Contains(r.stdout, s) {
-			t.Fatalf("stdout lacks %q:\n%s", s, r.stdout)
-		}
-	}
-	for _, s := range wantErrOut {
-		if !strings.Contains(r.stderr, s) {
-			t.Fatalf("stderr lacks %q:\n%s", s, r.stderr)
-		}
-	}
-}
-
-func runToken(t *testing.T, args []string, env map[string]string, stdin string, store *fakeStore) result {
-	t.Helper()
-	var environ []string
-	for k, v := range env {
-		environ = append(environ, k+"="+v)
-	}
-	var stdout, stderr bytes.Buffer
-	var tokens tokenStore
-	if store != nil {
-		tokens = store
-	}
-	err := run(t.Context(), append([]string{"token"}, args...), environ, strings.NewReader(stdin), &stdout, &stderr, tokens)
-	r := result{err: err, stdout: stdout.String(), stderr: stderr.String()}
-	if store != nil {
-		r.stored = maps.Clone(store.tokens)
-	}
-	return r
-}
-
-func hubEnv(t *testing.T, status int) map[string]string {
-	t.Helper()
-	return map[string]string{"BESZELSCOPE_URL": fakeHub(t, status), "BESZELSCOPE_ALLOW_INSECURE_HTTP": "1"}
-}
 
 func TestTokenSet(t *testing.T) {
 	good := makeToken(t, time.Now().Add(365*24*time.Hour+time.Hour))
@@ -161,6 +101,7 @@ func TestReadToken(t *testing.T) {
 	tests := []struct {
 		name       string
 		stdin      string
+		readErr    bool // stdin fails after stdin's bytes
 		prompt     bool
 		want       string
 		wantPrompt bool
@@ -173,11 +114,18 @@ func TestReadToken(t *testing.T) {
 		{name: "prompt without newline", stdin: "a.b.c", prompt: true, want: "a.b.c", wantPrompt: true},
 		{name: "prompt, empty line", stdin: "\n", prompt: true, wantPrompt: true, wantErr: "no token on stdin"},
 		{name: "pipe, empty", stdin: "", wantErr: "no token on stdin"},
+		// A read that fails partway must not hand back a cut-short token.
+		{name: "pipe read fails", stdin: "a.b", readErr: true, wantErr: "read token"},
+		{name: "prompt read fails", stdin: "a.b", readErr: true, prompt: true, wantPrompt: true, wantErr: "read token"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			got, err := readToken(strings.NewReader(tt.stdin), &stderr, tt.prompt)
+			var stdin io.Reader = strings.NewReader(tt.stdin)
+			if tt.readErr {
+				stdin = io.MultiReader(stdin, iotest.ErrReader(errors.New("broken pipe")))
+			}
+			got, err := readToken(stdin, &stderr, tt.prompt)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("err = %v, want %q", err, tt.wantErr)
@@ -188,50 +136,6 @@ func TestReadToken(t *testing.T) {
 			if prompted := strings.Contains(stderr.String(), "Paste the token"); prompted != tt.wantPrompt {
 				t.Fatalf("prompted = %v, want %v", prompted, tt.wantPrompt)
 			}
-		})
-	}
-}
-
-func TestTokenStatus(t *testing.T) {
-	good := makeToken(t, time.Now().Add(365*24*time.Hour+time.Hour))
-	expired := makeToken(t, time.Now().Add(-2*24*time.Hour-time.Hour))
-	withToken := func(env map[string]string, tok string) map[string]string {
-		env["BESZELSCOPE_TOKEN"] = tok
-		return env
-	}
-	tests := []struct {
-		name    string
-		env     map[string]string
-		store   *fakeStore
-		wantErr string
-		wantOut []string
-	}{
-		{
-			name: "keychain token, hub ok", env: hubEnv(t, 200), store: &fakeStore{tokens: map[string]string{"127.0.0.1": good}},
-			wantOut: []string{"source   Keychain (service beszelscope, account 127.0.0.1)", "user     testuser0000001", "365 days left", "check    ok, Beszel 0.21.1"},
-		},
-		{
-			name: "env token, hub ok", env: withToken(hubEnv(t, 200), good), store: &fakeStore{},
-			wantOut: []string{"source   BESZELSCOPE_TOKEN", "check    ok"},
-		},
-		{
-			name: "expired token, hub rejects it", env: hubEnv(t, 401), store: &fakeStore{tokens: map[string]string{"127.0.0.1": expired}},
-			wantErr: "the hub check failed", wantOut: []string{"expired", "(2 days ago)", "check    failed"},
-		},
-		{
-			name: "hub down", env: hubEnv(t, 0), store: &fakeStore{tokens: map[string]string{"127.0.0.1": good}},
-			wantErr: "the hub check failed", wantOut: []string{"check    failed", "unreachable"},
-		},
-		{name: "no token", env: hubEnv(t, 200), store: &fakeStore{}, wantErr: "no token: add one"},
-		{
-			name: "keychain and env both", env: withToken(hubEnv(t, 200), good), store: &fakeStore{tokens: map[string]string{"127.0.0.1": good}},
-			wantErr: "both the Keychain and BESZELSCOPE_TOKEN",
-		},
-		{name: "keychain fails", env: hubEnv(t, 200), store: &fakeStore{err: errors.New("locked")}, wantErr: "keychain: locked"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			runToken(t, []string{"status"}, tt.env, "", tt.store).check(t, tt.wantErr, tt.wantOut, nil)
 		})
 	}
 }
@@ -314,53 +218,76 @@ func TestTokenDelete(t *testing.T) {
 
 func TestTokenDispatch(t *testing.T) {
 	tests := []struct {
-		name       string
-		args       []string
-		noKeychain bool
-		wantErr    string
-		wantErrOut []string
+		name      string
+		args      []string
+		wantErr   string
+		wantOut   []string
+		wantNoOut bool // stdout must stay empty
 	}{
-		{name: "no subcommand prints usage", args: nil, wantErrOut: []string{"beszelscope token set"}},
-		{name: "--help", args: []string{"--help"}, wantErrOut: []string{"No command prints a token."}},
-		{name: "help", args: []string{"help"}, wantErrOut: []string{"beszelscope token list"}},
-		{name: "set --help", args: []string{"set", "--help"}, wantErrOut: []string{"beszelscope token set"}},
-		{name: "usage works off macOS", args: []string{"--help"}, noKeychain: true, wantErrOut: []string{"Usage:"}},
-		{name: "unknown subcommand", args: []string{"get"}, wantErr: `unknown token command "get"`},
-		{name: "unknown flag", args: []string{"list", "-x"}, wantErr: "token list: flag provided but not defined"},
-		{name: "extra argument", args: []string{"delete", "a.example.com"}, wantErr: "token delete takes no arguments"},
-		{name: "off macOS", args: []string{"list"}, noKeychain: true, wantErr: "need the macOS Keychain"},
+		{name: "no subcommand prints usage", args: nil, wantOut: []string{"beszelscope token set"}},
+		{name: "--help", args: []string{"--help"}, wantOut: []string{"No command prints a token."}},
+		{name: "-h", args: []string{"-h"}, wantOut: []string{"beszelscope token list"}},
+		{name: "help", args: []string{"help"}, wantOut: []string{"beszelscope token list"}},
+		{name: "set --help", args: []string{"set", "--help"}, wantOut: []string{"beszelscope token set"}},
+		{name: "status moved to check", args: []string{"status"}, wantErr: "token status is now beszelscope check", wantNoOut: true},
+		{name: "unknown subcommand", args: []string{"get"}, wantErr: `unknown token command "get"`, wantNoOut: true},
+		{name: "unknown flag", args: []string{"list", "-x"}, wantErr: "token list: flag provided but not defined", wantNoOut: true},
+		{name: "extra argument", args: []string{"delete", "a.example.com"}, wantErr: "token delete takes no arguments", wantNoOut: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := &fakeStore{}
-			if tt.noKeychain {
-				store = nil
+			r := runToken(t, tt.args, nil, "", &fakeStore{})
+			r.check(t, tt.wantErr, tt.wantOut, nil)
+			if r.stderr != "" {
+				t.Fatalf("stderr = %q, want nothing: errors are returned, help goes to stdout", r.stderr)
 			}
-			runToken(t, tt.args, nil, "", store).check(t, tt.wantErr, nil, tt.wantErrOut)
+			if tt.wantNoOut && r.stdout != "" {
+				t.Fatalf("stdout = %q, want nothing", r.stdout)
+			}
 		})
 	}
 }
 
-func TestTopLevel(t *testing.T) {
+func superuserToken(t *testing.T) string {
+	t.Helper()
+	claims, err := json.Marshal(map[string]any{
+		"id": "su", "type": "auth", "collectionId": "pbc_3142635823", "exp": time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := base64.RawURLEncoding
+	return enc.EncodeToString([]byte(`{"alg":"HS256"}`)) + "." + enc.EncodeToString(claims) + ".c2ln"
+}
+
+// runToken runs `beszelscope token args...`.
+func runToken(t *testing.T, args []string, env map[string]string, stdin string, store *fakeStore) result {
+	t.Helper()
+	return runCmd(t, append([]string{"token"}, args...), env, stdin, store)
+}
+
+// keychainStore turns the Keychain's not-found exit into found=false, and
+// passes every other failure on as an error.
+func TestKeychainStoreGet(t *testing.T) {
 	tests := []struct {
-		name       string
-		args       []string
-		wantOut    string // stdout prefix
-		wantErrOut string
+		name      string
+		res       keychain.Result
+		runErr    error
+		want      string
+		wantFound bool
+		wantErr   bool
 	}{
-		{name: "version", args: []string{"version"}, wantOut: "beszelscope dev"},
-		{name: "--help", args: []string{"--help"}, wantErrOut: "BESZELSCOPE_URL"},
-		{name: "-h", args: []string{"-h"}, wantErrOut: "beszelscope token ..."},
-		{name: "help", args: []string{"help"}, wantErrOut: "Usage:"},
+		{name: "stored", res: keychain.Result{Stdout: "a.b.c\n"}, want: "a.b.c", wantFound: true},
+		{name: "not found", res: keychain.Result{Code: 44, Stderr: "could not be found"}},
+		{name: "locked", res: keychain.Result{Code: 51, Stderr: "user interaction is not allowed"}, wantErr: true},
+		{name: "did not run", runErr: errors.New("killed"), wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if err := run(t.Context(), tt.args, nil, strings.NewReader(""), &stdout, &stderr, nil); err != nil {
-				t.Fatalf("run: %v", err)
-			}
-			if !strings.HasPrefix(stdout.String(), tt.wantOut) || !strings.Contains(stderr.String(), tt.wantErrOut) {
-				t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+			run := func(context.Context, string, ...string) (keychain.Result, error) { return tt.res, tt.runErr }
+			got, found, err := keychainStore{keychain.New(run)}.Get(t.Context(), "beszel.example.com")
+			if (err != nil) != tt.wantErr || got != tt.want || found != tt.wantFound {
+				t.Fatalf("Get = %q, %v, %v; want %q, %v, error %v", got, found, err, tt.want, tt.wantFound, tt.wantErr)
 			}
 		})
 	}

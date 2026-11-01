@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -245,6 +246,14 @@ func TestRedaction(t *testing.T) {
 			want: []string{`"secret":"***"`}, absent: []string{"s-123"},
 		},
 		{
+			// The go-sdk gets this logger and may group it.
+			name: "under Logger.WithGroup",
+			log: func(l *slog.Logger, c context.Context) {
+				l.WithGroup("req").InfoContext(c, "e", slog.String("token", "g-123"))
+			},
+			want: []string{`"req":{"token":"***"`}, absent: []string{"g-123"},
+		},
+		{
 			name: "bound to the context",
 			log: func(l *slog.Logger, c context.Context) {
 				l.InfoContext(logctx.With(c, slog.String("cookie", "c-123")), "e")
@@ -282,6 +291,74 @@ func TestRedaction(t *testing.T) {
 						t.Errorf("%s leaks %s: %s", name, a, got)
 					}
 				}
+			}
+		})
+	}
+}
+
+// Resource detection never stops the server: what it could not read becomes
+// a startup warning.
+func TestTelemetryResource(t *testing.T) {
+	tests := []struct {
+		name        string
+		attrs       string // OTEL_RESOURCE_ATTRIBUTES
+		wantWarning string
+	}{
+		{name: "clean environment", attrs: ""},
+		{name: "valid attributes", attrs: "team=ops"},
+		{name: "malformed attributes", attrs: "novalue", wantWarning: "partial resource"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", tt.attrs)
+			tel, err := newTelemetry(t.Context(), map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1"})
+			if err != nil {
+				t.Fatalf("newTelemetry: %v", err)
+			}
+			t.Cleanup(func() { tel.flush(context.Background(), slog.New(slog.DiscardHandler)) })
+			switch {
+			case tt.wantWarning == "" && tel.warning != nil:
+				t.Fatalf("warning = %v, want none", tel.warning)
+			case tt.wantWarning != "" && (tel.warning == nil || !strings.Contains(tel.warning.Error(), tt.wantWarning)):
+				t.Fatalf("warning = %v, want it to contain %q", tel.warning, tt.wantWarning)
+			}
+		})
+	}
+}
+
+// One provider failing to flush must not keep the others from flushing:
+// buffered logs would be lost.
+func TestFlush(t *testing.T) {
+	tests := []struct {
+		name     string
+		fail     []bool // per provider, in shutdown order
+		wantWarn int
+	}{
+		{name: "all flush", fail: []bool{false, false}},
+		{name: "first fails, second still runs", fail: []bool{true, false}, wantWarn: 1},
+		{name: "both fail", fail: []bool{true, true}, wantWarn: 2},
+		{name: "no providers", fail: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ran := 0
+			tel := &telemetry{}
+			for _, fail := range tt.fail {
+				tel.shutdown = append(tel.shutdown, func(context.Context) error {
+					ran++
+					if fail {
+						return errors.New("collector down")
+					}
+					return nil
+				})
+			}
+			var logs bytes.Buffer
+			tel.flush(t.Context(), slog.New(slog.NewJSONHandler(&logs, nil)))
+			if ran != len(tt.fail) {
+				t.Errorf("ran %d shutdowns, want %d", ran, len(tt.fail))
+			}
+			if got := strings.Count(logs.String(), "telemetry.flush_failed"); got != tt.wantWarn {
+				t.Errorf("%d flush warnings, want %d:\n%s", got, tt.wantWarn, logs.String())
 			}
 		})
 	}

@@ -133,6 +133,12 @@ beszelscope signs in as its own Beszel user with the `readonly` role, using a lo
 
    - On **Linux** and **Windows**, put it in the `BESZELSCOPE_TOKEN` environment variable instead (see [Add it to your AI app](#add-it-to-your-ai-app)).
 
+5. **Check it.** This shows where the token comes from, when it expires, and whether the hub accepts it:
+
+   ```sh
+   BESZELSCOPE_URL=https://beszel.example.com beszelscope check
+   ```
+
 **Renewing.** Create a new token (step 3) and store it again.
 
 **Revoking.** Change the user's password in `/_/`. That resets the user's token key, so every token for the user stops working.
@@ -171,14 +177,14 @@ All settings are environment variables.
 | `BESZELSCOPE_LOG_LEVEL` | `debug`, `info` (the default), `warn` or `error`. Logs go to stderr as JSON. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Turns on export of OpenTelemetry traces and logs over OTLP/HTTP. The other standard `OTEL_*` variables tune it but do not turn it on. |
 
-On macOS, the `token` commands manage the stored token. None of them ever prints it.
+`beszelscope check` works on every system. The `token` commands manage the Keychain and exist only on macOS. None of them ever prints a token.
 
 | Command | What it does |
 | --- | --- |
-| `beszelscope token set` | Stores the token for `BESZELSCOPE_URL`'s host, from a pipe or a prompt. One token per host name. |
-| `beszelscope token status` | Shows where the token comes from and when it expires, then checks it with the hub. |
-| `beszelscope token list` | Lists the hubs that have a stored token. |
-| `beszelscope token delete` | Removes the token for `BESZELSCOPE_URL`. |
+| `beszelscope check` | Shows the hub, where the token comes from and when it expires, then checks both with the hub. |
+| `beszelscope token set` | macOS: stores the token for `BESZELSCOPE_URL`'s host, from a pipe or a prompt. One token per host name. |
+| `beszelscope token list` | macOS: lists the hubs that have a stored token. |
+| `beszelscope token delete` | macOS: removes the token for `BESZELSCOPE_URL`. |
 
 ## Tools
 
