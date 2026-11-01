@@ -396,23 +396,20 @@ func (s *Sanitiser) container(orig string) string {
 // image keeps a public image of a kept container; anything else follows the
 // container's stand-in.
 func (s *Sanitiser) image(name, orig string) string {
-	if knownName(name) && !strings.HasPrefix(orig, "sha256:") && !strings.HasSuffix(orig, ":local") {
-		s.kept[orig] = true
-		return orig
-	}
 	if knownName(name) {
+		if !strings.HasPrefix(orig, "sha256:") && !strings.HasSuffix(orig, ":local") {
+			s.kept[orig] = true
+			return orig
+		}
 		return s.remember("digest", orig, func(n int) string {
 			return "sha256:" + fmt.Sprintf("%064x", n)
 		})
 	}
-	stand := s.container(name)
-	for _, a := range appPool {
-		if a.name == stand {
-			s.replaced[orig] = true
-			return a.image
-		}
-	}
 	s.replaced[orig] = true
+	stand := s.container(name)
+	if i := slices.IndexFunc(appPool, func(a struct{ name, image string }) bool { return a.name == stand }); i >= 0 {
+		return appPool[i].image
+	}
 	return "example/" + stand + ":latest"
 }
 

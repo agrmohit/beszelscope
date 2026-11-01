@@ -15,10 +15,10 @@ import (
 
 	"github.com/agrmohit/beszelscope/internal/hub"
 
-	"github.com/agrmohit/beszelscope/internal/fixtures"
+	"github.com/agrmohit/beszelscope/cmd/internal/fixtures"
 )
 
-var statTypes = []string{"1m", "10m", "20m", "120m", "480m"}
+var statTypes = []hub.StatType{hub.Stat1m, hub.Stat10m, hub.Stat20m, hub.Stat120m, hub.Stat480m}
 
 // rawFile is one captured response. In file, "{sys}" becomes the system's pseudonym.
 type rawFile struct {
@@ -105,11 +105,11 @@ func (c *client) list(ctx context.Context, collection string, q url.Values) ([]b
 
 var recordID = regexp.MustCompile(`^[a-z0-9]+$`)
 
-func filter(systemID, statType string) (string, error) {
+func filter(systemID string, t hub.StatType) (string, error) {
 	if !recordID.MatchString(systemID) {
 		return "", fmt.Errorf("unexpected system id %q", systemID)
 	}
-	return fmt.Sprintf("system='%s' && type='%s'", systemID, statType), nil
+	return fmt.Sprintf("system='%s' && type='%s'", systemID, t), nil
 }
 
 // capture fetches everything the tests need; systems come first so later
@@ -125,13 +125,11 @@ func capture(ctx context.Context, c *client) ([]rawFile, meta, error) {
 	if err != nil {
 		return nil, m, err
 	}
-	var hub struct {
-		V string `json:"v"`
-	}
-	if err := json.Unmarshal(info, &hub); err != nil {
+	var version hub.Info
+	if err := json.Unmarshal(info, &version); err != nil {
 		return nil, m, fmt.Errorf("decode info: %w", err)
 	}
-	m.HubVersion = hub.V
+	m.HubVersion = version.Version
 	add(fixtures.KindInfo, "info.json", "", info)
 
 	collections := []struct {
@@ -162,7 +160,7 @@ func capture(ctx context.Context, c *client) ([]rawFile, meta, error) {
 	m.FullSystem = full
 
 	for _, id := range systems {
-		f, err := filter(id, "1m")
+		f, err := filter(id, hub.Stat1m)
 		if err != nil {
 			return nil, m, err
 		}
@@ -183,14 +181,14 @@ func capture(ctx context.Context, c *client) ([]rawFile, meta, error) {
 		}
 		for _, kind := range []fixtures.Kind{fixtures.KindSystemStats, fixtures.KindContainerStats, fixtures.KindMonitorStats} {
 			// Container history is large; the 1h and 24h windows are enough.
-			if kind == fixtures.KindContainerStats && t != "1m" && t != "20m" {
+			if kind == fixtures.KindContainerStats && t != hub.Stat1m && t != hub.Stat20m {
 				continue
 			}
 			body, err := c.list(ctx, string(kind), url.Values{"filter": {f}, "sort": {"created"}})
 			if err != nil {
 				return nil, m, err
 			}
-			add(kind, string(kind)+"_{sys}_"+t+".json", full, body)
+			add(kind, string(kind)+"_{sys}_"+string(t)+".json", full, body)
 		}
 	}
 

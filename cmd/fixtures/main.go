@@ -17,9 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agrmohit/beszelscope/cmd/internal/fixtures"
 	"github.com/agrmohit/beszelscope/cmd/internal/keychain"
 	"github.com/agrmohit/beszelscope/internal/config"
-	"github.com/agrmohit/beszelscope/internal/fixtures"
+	"github.com/agrmohit/beszelscope/internal/hub"
 )
 
 const (
@@ -55,7 +56,7 @@ func run(ctx context.Context, environ []string, stderr io.Writer) error {
 	c := &client{
 		base:  cfg.HubURL,
 		token: cfg.Token.Reveal(),
-		http:  &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{ForceAttemptHTTP2: true}},
+		http:  &http.Client{Timeout: 30 * time.Second, Transport: hub.NewTransport()},
 	}
 	raw, meta, err := capture(ctx, c)
 	if err != nil {
