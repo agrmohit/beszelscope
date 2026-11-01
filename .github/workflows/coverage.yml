@@ -1,0 +1,53 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # the OIDC token Codecov accepts instead of a stored secret
+    concurrency:
+      group: coverage-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Same key as CI's ubuntu job, so the two share one cache.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/*.sum
+
+      - run: make coverage
+
+      # Fork PRs get no OIDC token, so they skip the upload.
+      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          # The hash is the one Codecov's GPG-signed SHA256SUM lists for this
+          # version (key 27034E7FDB850E0BBC2C62FF806BB28AED779869). Re-check
+          # the signature before changing either.
+          CODECOV_CLI: v11.3.1
+          CODECOV_SHA256: ca1d64196d2d34771084afe76ea657d581bf628e31d993ff8e52ea09cc88a56d
+        run: |
+          curl -fsSL -o codecov "https://cli.codecov.io/$CODECOV_CLI/linux/codecov"
+          echo "$CODECOV_SHA256  codecov" | sha256sum -c -
+          chmod +x codecov
+          token=$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://codecov.io" | jq -r .value)
+          echo "::add-mask::$token"
+          CODECOV_TOKEN=$token ./codecov upload-process --disable-search --fail-on-error -f coverage.out
