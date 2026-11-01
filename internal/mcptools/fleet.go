@@ -74,7 +74,7 @@ func (t *tools) fleet(ctx context.Context, req *mcp.CallToolRequest, in fleetIn)
 		if len(ids) > 0 && !slices.Contains(ids, s.ID) {
 			continue
 		}
-		if s.Status != "up" {
+		if s.Status != hub.StatusUp {
 			t.lastSeen(ctx, &fe, s, &input)
 			continue
 		}

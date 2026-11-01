@@ -167,6 +167,14 @@ func TestHistoryStats(t *testing.T) {
 				`{"metric":"cpu_iowait","unit":"pct","avg":10,"min_bucket_avg":5,"max_bucket_avg":15,"high_ago_s":10800,"last":15,"last_ago_s":10800,"buckets":2,"expected_buckets":84,"coverage_pct":2}`,
 		},
 		{
+			name: "hottest sensor below zero is the warmest one, not 0", metrics: []string{"temp"},
+			rows: []hub.SystemStats{
+				{Created: ago(3 * time.Hour), Type: hub.Stat120m, Stats: hub.Stats{Temps: map[string]float64{"out": -5, "cold": -12}}},
+				{Created: ago(time.Hour), Type: hub.Stat120m, Stats: hub.Stats{Temps: map[string]float64{"out": -3}}},
+			},
+			want: `{"metric":"temp","unit":"celsius","avg":-4,"min_bucket_avg":-5,"max_bucket_avg":-3,"high_ago_s":3600,"last":-3,"last_ago_s":3600,"buckets":2,"expected_buckets":84,"coverage_pct":2}`,
+		},
+		{
 			name: "old agent: memory peak falls back to the percentage", metrics: []string{"mem"},
 			rows: []hub.SystemStats{{Created: ago(time.Hour), Stats: hub.Stats{MemPct: 33, MaxMemUsed: 99}}},
 			want: `{"metric":"mem","unit":"pct","avg":33,"min_bucket_avg":33,"peak":33,"high_ago_s":3600,"last":33,"last_ago_s":3600,"buckets":1,"expected_buckets":84,"coverage_pct":1}`,

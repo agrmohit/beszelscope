@@ -41,13 +41,35 @@ const (
 	pointBudget       = 360 // series x points
 )
 
-// metricKinds lists every kind; container and monitor need a target.
-var metricKinds = []string{"cpu", "cpu_iowait", "mem", "swap", "disk", "disk_io", "net", "load", "temp", "gpu", "container", "monitor"}
+// MetricKind is what metric_history reads; container and monitor need a target.
+type MetricKind string
+
+// The metric kinds metric_history accepts.
+const (
+	MetricCPU       MetricKind = "cpu"
+	MetricIOWait    MetricKind = "cpu_iowait"
+	MetricMem       MetricKind = "mem"
+	MetricSwap      MetricKind = "swap"
+	MetricDisk      MetricKind = "disk"
+	MetricDiskIO    MetricKind = "disk_io"
+	MetricNet       MetricKind = "net"
+	MetricLoad      MetricKind = "load"
+	MetricTemp      MetricKind = "temp"
+	MetricGPU       MetricKind = "gpu"
+	MetricContainer MetricKind = "container"
+	MetricMonitor   MetricKind = "monitor"
+)
+
+// metricKinds lists every kind, in the order errors name them.
+var metricKinds = []MetricKind{
+	MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDisk, MetricDiskIO,
+	MetricNet, MetricLoad, MetricTemp, MetricGPU, MetricContainer, MetricMonitor,
+}
 
 // Metric is one requested metric: a kind and an optional target.
 type Metric struct {
 	Raw    string
-	Kind   string
+	Kind   MetricKind
 	Target string
 }
 
@@ -70,17 +92,18 @@ func ParseMetrics(raw []string) ([]Metric, []Source, error) {
 	var out []Metric
 	need := map[Source]bool{}
 	for _, r := range raw {
-		kind, target, _ := strings.Cut(r, ":")
+		name, target, _ := strings.Cut(r, ":")
+		kind := MetricKind(name)
 		if !slices.Contains(metricKinds, kind) {
-			return nil, nil, fmt.Errorf("unknown metric %q; kinds are %s", r, strings.Join(metricKinds, ", "))
+			return nil, nil, fmt.Errorf("unknown metric %q; kinds are %s", r, joinNames(metricKinds))
 		}
 		switch kind {
-		case "container", "monitor":
+		case MetricContainer, MetricMonitor:
 			if target == "" {
 				return nil, nil, fmt.Errorf("metric %q needs a target, e.g. %s:<name>", r, kind)
 			}
-		case "disk", "net", "temp", "gpu":
-		default:
+		case MetricDisk, MetricNet, MetricTemp, MetricGPU:
+		case MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDiskIO, MetricLoad:
 			if target != "" {
 				return nil, nil, fmt.Errorf("metric %q takes no target", r)
 			}
@@ -90,11 +113,11 @@ func ParseMetrics(raw []string) ([]Metric, []Source, error) {
 		}
 		out = append(out, Metric{Raw: r, Kind: kind, Target: target})
 		switch kind {
-		case "container":
+		case MetricContainer:
 			need[SourceContainers] = true
-		case "monitor":
+		case MetricMonitor:
 			need[SourceMonitors] = true
-		default:
+		case MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDisk, MetricDiskIO, MetricNet, MetricLoad, MetricTemp, MetricGPU:
 			need[SourceStats] = true
 		}
 	}
@@ -241,24 +264,25 @@ func History(in HistoryInput, o HistoryOptions) (HistoryResult, error) {
 // because Beszel keeps a true peak per direction but none for the sum.
 func skeleton(m Metric) []line {
 	switch m.Kind {
-	case "cpu", "mem":
+	case MetricCPU, MetricMem:
 		return []line{{unit: "pct", peaks: true}}
-	case "cpu_iowait", "swap", "disk", "gpu":
+	case MetricIOWait, MetricSwap, MetricDisk, MetricGPU:
 		return []line{{unit: "pct"}}
-	case "disk_io":
+	case MetricDiskIO:
 		return []line{{part: "read", unit: "bytes_per_s", peaks: true}, {part: "write", unit: "bytes_per_s", peaks: true}}
-	case "net":
+	case MetricNet:
 		peaks := m.Target == "" // per-interface rows store no maxima
 		return []line{{part: "sent", unit: "bytes_per_s", peaks: peaks}, {part: "recv", unit: "bytes_per_s", peaks: peaks}}
-	case "load":
+	case MetricLoad:
 		return []line{{unit: "load"}}
-	case "temp":
+	case MetricTemp:
 		return []line{{unit: "celsius"}}
-	case "container":
+	case MetricContainer:
 		return []line{{part: "cpu", unit: "pct"}, {part: "mem", unit: "bytes"}}
-	default: // monitor
+	case MetricMonitor:
 		return []line{{unit: "ms", peaks: true}}
 	}
+	panic("skeleton: unhandled metric kind " + string(m.Kind)) // ParseMetrics admits only known kinds
 }
 
 // readLines fills a metric's lines for one system. note explains an empty
@@ -269,22 +293,23 @@ func readLines(in HistoryInput, s hub.System, m Metric) (lines []line, note stri
 		return lines, "could not read history: " + err.Error(), nil
 	}
 	switch m.Kind {
-	case "container":
+	case MetricContainer:
 		if err := in.ContainerErrs[s.ID]; err != nil {
 			return failed(err)
 		}
 		return containerLines(in.Containers[s.ID], s, m, lines)
-	case "monitor":
+	case MetricMonitor:
 		if err := cmp.Or(in.MonitorsErr, in.MonitorStatsErrs[s.ID]); err != nil {
 			return failed(err)
 		}
 		return monitorLines(in, s, m, lines)
-	default:
+	case MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDisk, MetricDiskIO, MetricNet, MetricLoad, MetricTemp, MetricGPU:
 		if err := in.StatsErrs[s.ID]; err != nil {
 			return failed(err)
 		}
 		return statsLines(in.Stats[s.ID], s, m, lines)
 	}
+	panic("readLines: unhandled metric kind " + string(m.Kind)) // ParseMetrics admits only known kinds
 }
 
 // targetCheck validates m.Target against the names seen in the window. With
@@ -301,34 +326,52 @@ func targetCheck(s hub.System, m Metric, what string, rows int, valid map[string
 	}
 }
 
+// targetNoun names what a metric's target is, for messages; "" for kinds
+// that take none.
+func targetNoun(k MetricKind) string {
+	switch k {
+	case MetricDisk:
+		return "filesystem"
+	case MetricNet:
+		return "interface"
+	case MetricTemp:
+		return "temperature sensor"
+	case MetricGPU:
+		return "GPU"
+	case MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDiskIO, MetricLoad, MetricContainer, MetricMonitor:
+	}
+	return ""
+}
+
 func statsLines(rows []hub.SystemStats, s hub.System, m Metric, lines []line) ([]line, string, error) {
-	what := map[string]string{"disk": "filesystem", "net": "interface", "temp": "temperature sensor", "gpu": "GPU"}[m.Kind]
+	what := targetNoun(m.Kind)
 	valid := map[string]bool{}
 	for _, r := range rows {
 		x := r.Stats
 		switch m.Kind {
-		case "disk":
+		case MetricDisk:
 			for k := range x.ExtraFs {
 				valid[k] = true
 			}
-		case "net":
+		case MetricNet:
 			for k := range x.Interfaces {
 				valid[k] = true
 			}
-		case "temp":
+		case MetricTemp:
 			for k := range x.Temps {
 				valid[k] = true
 			}
-		case "gpu":
+		case MetricGPU:
 			for k := range x.GPU {
 				valid[k] = true
 			}
+		case MetricCPU, MetricIOWait, MetricMem, MetricSwap, MetricDiskIO, MetricLoad, MetricContainer, MetricMonitor: // no named targets
 		}
 	}
 	if note, err := targetCheck(s, m, what, len(rows), valid); note != "" || err != nil {
 		return lines, note, err
 	}
-	if (m.Kind == "temp" || m.Kind == "gpu") && len(rows) > 0 && len(valid) == 0 {
+	if (m.Kind == MetricTemp || m.Kind == MetricGPU) && len(rows) > 0 && len(valid) == 0 {
 		return lines, "no " + what + "s reported in this window", nil
 	}
 	for _, r := range rows {
@@ -341,7 +384,7 @@ func statsLines(rows []hub.SystemStats, s hub.System, m Metric, lines []line) ([
 	for i := range lines {
 		lines[i].rows = len(lines[i].samples)
 	}
-	if m.Kind == "swap" && len(rows) > 0 && lines[0].rows == 0 {
+	if m.Kind == MetricSwap && len(rows) > 0 && lines[0].rows == 0 {
 		return lines, "no swap on this server", nil
 	}
 	return lines, "", nil
@@ -351,57 +394,64 @@ func statsLines(rows []hub.SystemStats, s hub.System, m Metric, lines []line) ([
 // true maximum: rollups store it, and a 1m row is its own maximum.
 func statValue(x hub.Stats, m Metric, i int) (v, hi float64, ok bool) {
 	switch m.Kind {
-	case "cpu":
+	case MetricCPU:
 		return x.CPU, max(x.MaxCPU, x.CPU), true
-	case "cpu_iowait":
+	case MetricIOWait:
 		if len(x.CPUBreakdown) > 2 {
 			return x.CPUBreakdown[2], 0, true
 		}
-	case "mem":
+	case MetricMem:
 		if x.Mem[0] == 0 {
 			return x.MemPct, x.MemPct, true // agents before 0.21.1 send no bytes
 		}
 		return x.MemPct, max(float64(x.MaxMemUsed)/float64(x.Mem[0])*100, x.MemPct), true
-	case "swap":
+	case MetricSwap:
 		if x.Swap[0] > 0 {
 			return float64(x.Swap[1]) / float64(x.Swap[0]) * 100, 0, true
 		}
-	case "disk":
+	case MetricDisk:
 		if m.Target == "" {
 			return x.DiskPct, 0, true
 		}
 		if fs, found := x.ExtraFs[m.Target]; found && fs.TotalGB > 0 {
 			return fs.UsedGB / fs.TotalGB * 100, 0, true
 		}
-	case "disk_io":
+	case MetricDiskIO:
 		return float64(x.DiskIO[i]), float64(max(x.MaxDiskIO[i], x.DiskIO[i])), true
-	case "net":
+	case MetricNet:
 		if m.Target == "" {
 			return float64(x.Bandwidth[i]), float64(max(x.MaxBandwidth[i], x.Bandwidth[i])), true
 		}
 		if ni, found := x.Interfaces[m.Target]; found {
 			return float64(ni[i]), 0, true
 		}
-	case "load":
+	case MetricLoad:
 		return x.LoadAvg[0], 0, true
-	case "temp":
+	case MetricTemp:
 		if m.Target != "" {
 			t, found := x.Temps[m.Target]
 			return t, 0, found
 		}
-		for _, t := range x.Temps {
-			v, ok = max(v, t), true
+		for _, t := range x.Temps { // from the first sensor: all may be below 0
+			if !ok || t > v {
+				v = t
+			}
+			ok = true
 		}
 		return v, 0, ok
-	case "gpu":
+	case MetricGPU:
 		if m.Target != "" {
 			g, found := x.GPU[m.Target]
 			return g.Usage, 0, found
 		}
 		for _, g := range x.GPU {
-			v, ok = max(v, g.Usage), true
+			if !ok || g.Usage > v {
+				v = g.Usage
+			}
+			ok = true
 		}
 		return v, 0, ok
+	case MetricContainer, MetricMonitor: // not in stats rows
 	}
 	return 0, 0, false
 }
@@ -477,7 +527,7 @@ func monitorLines(in HistoryInput, s hub.System, m Metric, lines []line) ([]line
 
 func summarise(in HistoryInput, l line) SeriesItem {
 	item := SeriesItem{Part: l.part, Unit: l.unit, Buckets: l.rows, ExpectedBuckets: cmp.Or(l.expected, in.Window.Expected)}
-	item.CoveragePct = deref(round(min(100, float64(l.rows)/float64(item.ExpectedBuckets)*100), 0))
+	item.CoveragePct = roundTo(min(100, float64(l.rows)/float64(item.ExpectedBuckets)*100), 0)
 	if l.total > 0 {
 		item.LossPct = round((1-float64(l.success)/float64(l.total))*100, 2)
 	}
@@ -530,9 +580,6 @@ func maxBy(a, b bucket, f func(bucket) float64) bucket {
 
 // downsample returns at most n points, averaging consecutive buckets.
 func downsample(now time.Time, samples []bucket, n int) [][2]float64 {
-	if len(samples) == 0 {
-		return nil
-	}
 	n = min(n, len(samples))
 	out := make([][2]float64, 0, n)
 	for i := range n {
@@ -541,7 +588,7 @@ func downsample(now time.Time, samples []bucket, n int) [][2]float64 {
 		for _, x := range chunk {
 			sum += x.v
 		}
-		out = append(out, [2]float64{float64(ageS(now, chunk[len(chunk)-1].at)), deref(round(sum/float64(len(chunk)), 2))})
+		out = append(out, [2]float64{float64(ageS(now, chunk[len(chunk)-1].at)), roundTo(sum/float64(len(chunk)), 2)})
 	}
 	return out
 }

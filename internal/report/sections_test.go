@@ -89,7 +89,7 @@ func TestDetailNetwork(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := DetailInput{FleetInput: FleetInput{Now: now, Monitors: tt.monitors}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
-			r, err := Detail(in, DetailOptions{Sections: []string{SectionNetwork}})
+			r, err := Detail(in, DetailOptions{Sections: []Section{SectionNetwork}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -177,7 +177,7 @@ func TestDetailDisk(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := DetailInput{FleetInput: FleetInput{Now: now, Pools: tt.pools, Smart: tt.smart}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
-			r, err := Detail(in, DetailOptions{Sections: []string{SectionDisk}})
+			r, err := Detail(in, DetailOptions{Sections: []Section{SectionDisk}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -238,7 +238,7 @@ func TestDetailGPU(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
-			r, err := Detail(in, DetailOptions{Sections: []string{SectionGPU}})
+			r, err := Detail(in, DetailOptions{Sections: []Section{SectionGPU}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -290,6 +290,12 @@ func TestDetailContainers(t *testing.T) {
 		opts       DetailOptions
 		want       string
 	}{
+		{
+			name: "a problem row already first stays first", sys: up,
+			containers: []hub.Container{ctr("u", 0.1, 1, unhealthy), ctr("h", 3, 1, nil)},
+			want: `{"hints":null,"section":{"counts":{"total":2,"shown":2,"truncated":false},"unhealthy":1,"rows":[` +
+				row("u", 0.1, 1048576, true) + `,` + row("h", 3, 1048576, false) + `]}}`,
+		},
 		{
 			name: "default sort is cpu, highest first; MiB to bytes", sys: up, containers: three,
 			want: `{"hints":null,"section":{"counts":{"total":3,"shown":3,"truncated":false},"unhealthy":0,"rows":[` +
@@ -413,7 +419,7 @@ func TestDetailContainers(t *testing.T) {
 				FleetInput: FleetInput{Now: now, Containers: tt.containers, RecentContainers: tt.recent},
 				System:     tt.sys, ContainersErr: tt.readErr,
 			}
-			tt.opts.Sections = []string{SectionContainers}
+			tt.opts.Sections = []Section{SectionContainers}
 			r, err := Detail(in, tt.opts)
 			if err != nil {
 				t.Fatal(err)
@@ -491,7 +497,7 @@ func TestDetailServices(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := DetailInput{FleetInput: FleetInput{Now: now, Services: tt.services}, System: tt.sys, ServicesErr: tt.readErr}
-			tt.opts.Sections = []string{SectionServices}
+			tt.opts.Sections = []Section{SectionServices}
 			r, err := Detail(in, tt.opts)
 			if err != nil {
 				t.Fatal(err)
@@ -513,7 +519,7 @@ func TestDetailHints(t *testing.T) {
 	for range 2 {
 		in.Containers = append(in.Containers, hub.Container{System: up.ID, Name: "c", Updated: now.UnixMilli()})
 	}
-	r, err := Detail(in, DetailOptions{Sections: []string{SectionServices, SectionContainers}, Limit: 1})
+	r, err := Detail(in, DetailOptions{Sections: []Section{SectionServices, SectionContainers}, Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,6 +551,11 @@ func TestDetailUpdates(t *testing.T) {
 			name: "security first, then name ignoring case (vim before Zsh); versions; check age", sys: up,
 			packages: &hub.PackageUpdates{Manager: "dnf", CheckedAt: checked, SecurityKnown: true, Packages: pkgs},
 			want:     `{"total":4,"security":2,"manager":"dnf","checked_ago_s":2400,"packages":[{"name":"curl","current":"8.1","available":"8.2","security":true},{"name":"openssl","current":"3.5.1","available":"3.5.2","security":true},{"name":"vim","current":"9.1","available":"9.2"},{"name":"Zsh","available":"5.3"}]}`,
+		},
+		{
+			name: "a security package already first stays first", sys: up,
+			packages: &hub.PackageUpdates{Manager: "dnf", CheckedAt: checked, SecurityKnown: true, Packages: []hub.Package{pkgs[3], pkgs[0]}},
+			want:     `{"total":2,"security":1,"manager":"dnf","checked_ago_s":2400,"packages":[{"name":"curl","current":"8.1","available":"8.2","security":true},{"name":"vim","current":"9.1","available":"9.2"}]}`,
 		},
 		{
 			name: "manager does not flag security: no security count", sys: up,
@@ -597,12 +608,34 @@ func TestDetailUpdates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Details: tt.details, Packages: tt.packages, PackagesErr: tt.readErr}
-			r, err := Detail(in, DetailOptions{Sections: []string{SectionUpdates}})
+			r, err := Detail(in, DetailOptions{Sections: []Section{SectionUpdates}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got := asJSON(t, r.Updates); got != tt.want {
 				t.Fatalf("got  %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProblemsFirst(t *testing.T) {
+	tests := []struct {
+		name         string
+		aProb, bProb int
+		aName, bName string
+		want         int
+	}{
+		{name: "problem before healthy", aProb: 1, bProb: 0, aName: "z", bName: "a", want: -1},
+		{name: "healthy after problem", aProb: 0, bProb: 2, aName: "a", bName: "z", want: 1},
+		{name: "both with problems: by name", aProb: 1, bProb: 3, aName: "a", bName: "b", want: -1},
+		{name: "both healthy: by name", aName: "b", bName: "a", want: 1},
+		{name: "same name", aName: "a", bName: "a", want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := problemsFirst(tt.aProb, tt.bProb, tt.aName, tt.bName); got != tt.want {
+				t.Fatalf("problemsFirst = %d, want %d", got, tt.want)
 			}
 		})
 	}

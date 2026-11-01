@@ -94,7 +94,6 @@ const (
 	genAIOperationNameKey = attribute.Key("gen_ai.operation.name")
 	genAIToolCallArgsKey  = attribute.Key("gen_ai.tool.call.arguments")
 	mcpProtocolVersionKey = attribute.Key("mcp.protocol.version")
-	mcpSessionIDKey       = attribute.Key("mcp.session.id")
 )
 
 // instrument wraps a handler with one root span, one completion log line
@@ -115,13 +114,10 @@ func instrument[In, Out any](t *tools, name string, h mcp.ToolHandlerFor[In, Out
 				genAIToolCallArgsKey.String(string(args)), // opt-in in semconv; kept by choice
 			))
 		// The SDK does not expose the JSON-RPC request id, so jsonrpc.request.id
-		// is left out. Over stdio there is no session id.
+		// is left out. Stdio has no session, so mcp.session.id is left out too.
 		if req != nil {
 			if v := req.ProtocolVersion(); v != "" {
 				span.SetAttributes(mcpProtocolVersionKey.String(v))
-			}
-			if req.Session != nil && req.Session.ID() != "" {
-				span.SetAttributes(mcpSessionIDKey.String(req.Session.ID()))
 			}
 		}
 		start := t.d.Now()
@@ -141,10 +137,6 @@ func instrument[In, Out any](t *tools, name string, h mcp.ToolHandlerFor[In, Out
 				span.SetAttributes(semconv.ErrorTypeKey.String("tool_error"))
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
-			case res != nil && res.IsError:
-				outcome = "error"
-				span.SetAttributes(semconv.ErrorTypeKey.String("tool_error"))
-				span.SetStatus(codes.Error, "tool returned an error result")
 			}
 			span.End()
 			t.d.Logger.InfoContext(ctx, "tool.call.completed",

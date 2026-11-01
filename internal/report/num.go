@@ -12,9 +12,15 @@ func round(v float64, d int) *float64 {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return nil
 	}
-	p := math.Pow(10, float64(d))
-	r := math.Round(v*p) / p
+	r := roundTo(v, d)
 	return &r
+}
+
+// roundTo rounds v to d decimals, for values that are finite by
+// construction (hub JSON floats and guarded ratios).
+func roundTo(v float64, d int) float64 {
+	p := math.Pow(10, float64(d))
+	return math.Round(v*p) / p
 }
 
 // ageS is whole seconds from t to now; never negative.

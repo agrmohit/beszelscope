@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -286,6 +287,7 @@ func TestRequestShape(t *testing.T) {
 type step struct {
 	status int
 	reset  bool
+	cut    bool // 200 headers, then the connection closes mid-body
 	stall  time.Duration
 	body   string
 }
@@ -298,6 +300,15 @@ func scripted(t *testing.T, steps []step, hits *atomic.Int32) http.HandlerFunc {
 		if s.reset {
 			conn, _, err := http.NewResponseController(w).Hijack()
 			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		if s.cut {
+			conn, buf, err := http.NewResponseController(w).Hijack()
+			if err == nil {
+				_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"v\"")
+				_ = buf.Flush()
 				_ = conn.Close()
 			}
 			return
@@ -328,6 +339,8 @@ func TestRetryPolicy(t *testing.T) {
 		{name: "504 then 200", steps: []step{{status: 504}, ok}, wantHits: 2},
 		{name: "502 twice gives up", steps: []step{{status: 502}, {status: 502}}, wantHits: 2, wantErr: errStatus},
 		{name: "reset then 200", steps: []step{{reset: true}, ok}, wantHits: 2},
+		{name: "body cut short then 200", steps: []step{{cut: true}, ok}, wantHits: 2},
+		{name: "body cut short twice gives up", steps: []step{{cut: true}, {cut: true}}, wantHits: 2, wantErr: ErrUnreachable},
 		{name: "reset twice gives up", steps: []step{{reset: true}, {reset: true}}, wantHits: 2, wantErr: ErrUnreachable},
 		{name: "500 not retried", steps: []step{{status: 500}, ok}, wantHits: 1, wantErr: errStatus},
 		{name: "404 not retried", steps: []step{{status: 404}, ok}, wantHits: 1, wantErr: errStatus},
@@ -413,15 +426,17 @@ func TestExpiredTokenDetection(t *testing.T) {
 func TestPaging(t *testing.T) {
 	tests := []struct {
 		name      string
-		pages     []int // items per page
+		pages     []int // items per page; -1 answers HTTP 500
 		wantItems int
 		wantReqs  int32
+		wantErr   bool
 	}{
 		{name: "one short page", pages: []int{3}, wantItems: 3, wantReqs: 1},
 		{name: "empty", pages: []int{0}, wantItems: 0, wantReqs: 1},
 		{name: "full page then short", pages: []int{1000, 3}, wantItems: 1003, wantReqs: 2},
 		{name: "exactly full then empty", pages: []int{1000, 0}, wantItems: 1000, wantReqs: 2},
 		{name: "three pages", pages: []int{1000, 1000, 1}, wantItems: 2001, wantReqs: 3},
+		{name: "a later page fails: error, no partial list", pages: []int{1000, -1}, wantReqs: 2, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -432,6 +447,10 @@ func TestPaging(t *testing.T) {
 				if r.URL.Query().Get("page") != strconv.Itoa(n) {
 					t.Errorf("request %d asked for page %s", n, r.URL.Query().Get("page"))
 				}
+				if tt.pages[n-1] < 0 {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
 				items := make([]string, tt.pages[n-1])
 				for i := range items {
 					items[i] = `{"name":"c"}`
@@ -439,7 +458,7 @@ func TestPaging(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"items":[%s]}`, strings.Join(items, ","))
 			})
 			got, err := newClient(t, h).Containers(t.Context())
-			if err != nil || len(got) != tt.wantItems || reqs.Load() != tt.wantReqs {
+			if (err != nil) != tt.wantErr || len(got) != tt.wantItems || reqs.Load() != tt.wantReqs {
 				t.Errorf("got %d items in %d requests (err %v), want %d in %d",
 					len(got), reqs.Load(), err, tt.wantItems, tt.wantReqs)
 			}
@@ -475,6 +494,11 @@ func TestRejectsUnsafeFilterInput(t *testing.T) {
 			_, err3 := c.MonitorStats(t.Context(), tt.id, tt.typ, since)
 			if err1 == nil || err2 == nil || err3 == nil || reqs.Load() != 0 {
 				t.Errorf("errs %v / %v / %v after %d requests; want 3 errors and no request", err1, err2, err3, reqs.Load())
+			}
+			if tt.typ == Stat1m { // PackageUpdates takes no type, so only the id rows apply
+				if _, err := c.PackageUpdates(t.Context(), tt.id); err == nil || reqs.Load() != 0 {
+					t.Errorf("PackageUpdates err %v after %d requests; want an error and no request", err, reqs.Load())
+				}
 			}
 		})
 	}
@@ -617,6 +641,7 @@ func TestLastStatsAt(t *testing.T) {
 	}{
 		{name: "newest row", id: bravoID, body: `{"items":[{"created":"2026-10-29 08:40:00.012Z"}]}`, want: "2026-10-29T08:40:00Z"},
 		{name: "no rows", id: bravoID, body: `{"items":[]}`},
+		{name: "hub error is an error, not no data", id: bravoID, body: "500", wantErr: "HTTP 500"},
 		{name: "unsafe id", id: "x' || 1=1", wantErr: "invalid system id"},
 	}
 	for _, tt := range tests {
@@ -625,6 +650,10 @@ func TestLastStatsAt(t *testing.T) {
 			c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if strings.HasSuffix(r.URL.Path, "/api/beszel/info") {
 					_, _ = w.Write([]byte(`{"v":"0.21.1"}`))
+					return
+				}
+				if tt.body == "500" {
+					w.WriteHeader(http.StatusInternalServerError)
 					return
 				}
 				_, _ = w.Write([]byte(tt.body))
@@ -644,5 +673,36 @@ func TestLastStatsAt(t *testing.T) {
 				t.Fatalf("got %q, %v; want %q", s, err, tt.want)
 			}
 		})
+	}
+}
+
+// A call waiting for a parallel slot gives up when its context ends.
+func TestSlotWaitCancelled(t *testing.T) {
+	release := make(chan struct{})
+	var hits atomic.Int32
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		<-release
+		_, _ = w.Write([]byte(`{"v":"0.21.1"}`))
+	}), func(o *Options) { o.MaxParallel = 1 })
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Info(t.Context())
+		done <- err
+	}()
+	for hits.Load() == 0 { // the first call now holds the only slot
+		runtime.Gosched()
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := c.Info(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Errorf("first call: %v", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("hits = %d, want 1: the cancelled call must not reach the hub", got)
 	}
 }

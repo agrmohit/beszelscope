@@ -43,7 +43,7 @@ func TestDetailGolden(t *testing.T) {
 		}
 		return in
 	}
-	both := []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices, SectionUpdates}
+	both := []Section{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices, SectionUpdates}
 	tests := []struct {
 		name   string
 		system string
@@ -111,8 +111,8 @@ func TestDetailEnvelope(t *testing.T) {
 		sys      hub.System
 		hub      string
 		expires  time.Time
-		sections []string
-		sort     string
+		sections []Section
+		sort     SortKey
 		limit    int
 		want     string // the result as JSON, as_of dropped
 		wantErr  string
@@ -122,27 +122,27 @@ func TestDetailEnvelope(t *testing.T) {
 			want: `{"system":{"name":"web","status":"up","age_s":30},"summary":{"agent":"0.21.1","uptime_s":3600,"cpu_pct":12.3,"mem_pct":70,"disk_pct":50,"temp_hottest_c":48.3,"load_avg":[2,1,1],"load_per_thread":0.25,"net_bytes_per_s":2048}}`,
 		},
 		{
-			name: "core only", sys: up, sections: []string{SectionCore},
+			name: "core only", sys: up, sections: []Section{SectionCore},
 			want: `{"system":{"name":"web","status":"up","age_s":30},"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"absent":["battery: not reported by this host","fans: not reported by this host","memory: agent older than 0.21.1 reports no byte counts","temperatures: not reported by this host"]}}`,
 		},
 		{
-			name: "down: last seen, not age", sys: down, sections: []string{SectionCore},
+			name: "down: last seen, not age", sys: down, sections: []Section{SectionCore},
 			want: `{"system":{"name":"web","status":"down","last_seen_ago_s":1140},"core":{"unavailable":"system is down, last seen 19m ago"}}`,
 		},
 		{
-			name: "token expiring and agent skew warn", sys: up, hub: "0.22.0", expires: now.Add(5 * 24 * time.Hour), sections: []string{SectionCore},
+			name: "token expiring and agent skew warn", sys: up, hub: "0.22.0", expires: now.Add(5 * 24 * time.Hour), sections: []Section{SectionCore},
 			want: `{"system":{"name":"web","status":"up","age_s":30},"warnings":["hub token expires in 5d; renew it (see README)","web runs agent 0.21.1; hub is 0.22.0"],"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"absent":["battery: not reported by this host","fans: not reported by this host","memory: agent older than 0.21.1 reports no byte counts","temperatures: not reported by this host"]}}`,
 		},
 		{
-			name: "matching hub version does not warn", sys: up, hub: "0.21.1", sections: []string{SectionCore},
+			name: "matching hub version does not warn", sys: up, hub: "0.21.1", sections: []Section{SectionCore},
 			want: `{"system":{"name":"web","status":"up","age_s":30},"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"absent":["battery: not reported by this host","fans: not reported by this host","memory: agent older than 0.21.1 reports no byte counts","temperatures: not reported by this host"]}}`,
 		},
-		{name: "unknown section", sys: up, sections: []string{"alerts"}, wantErr: `unknown section "alerts"; want one of summary, core, network, disk, gpu, containers, services, updates`},
+		{name: "unknown section", sys: up, sections: []Section{"alerts"}, wantErr: `unknown section "alerts"; want one of summary, core, network, disk, gpu, containers, services, updates`},
 		{name: "unknown sort", sys: up, sort: "size", wantErr: `unknown sort "size"; want one of cpu, mem, name`},
 		{name: "negative limit", sys: up, limit: -1, wantErr: "limit -1 out of range 1-200"},
 		{name: "limit past the cap", sys: up, limit: 201, wantErr: "limit 201 out of range 1-200"},
 		{
-			name: "limit at the cap is fine", sys: up, limit: 200, sections: []string{SectionCore},
+			name: "limit at the cap is fine", sys: up, limit: 200, sections: []Section{SectionCore},
 			want: `{"system":{"name":"web","status":"up","age_s":30},"core":{"sampled_ago_s":20,"cpu_pct":5,"swap":{"total_bytes":0,"used_bytes":0},"absent":["battery: not reported by this host","fans: not reported by this host","memory: agent older than 0.21.1 reports no byte counts","temperatures: not reported by this host"]}}`,
 		},
 	}
@@ -290,12 +290,34 @@ func TestDetailCore(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := DetailInput{FleetInput: FleetInput{Now: now}, System: tt.sys, Latest: tt.latest, StatsErr: tt.statsErr}
-			r, err := Detail(in, DetailOptions{Sections: []string{SectionCore}})
+			r, err := Detail(in, DetailOptions{Sections: []Section{SectionCore}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got := asJSON(t, r.Core); got != tt.want {
 				t.Fatalf("got  %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOSName(t *testing.T) {
+	tests := []struct {
+		name string
+		d    hub.SystemDetails
+		want string
+	}{
+		{name: "the agent's name wins", d: hub.SystemDetails{OS: hub.OSLinux, OSName: "Fedora Linux 44"}, want: "Fedora Linux 44"},
+		{name: "Linux by code", d: hub.SystemDetails{OS: hub.OSLinux}, want: "Linux"},
+		{name: "macOS by code", d: hub.SystemDetails{OS: hub.OSDarwin}, want: "macOS"},
+		{name: "Windows by code", d: hub.SystemDetails{OS: hub.OSWindows}, want: "Windows"},
+		{name: "FreeBSD by code", d: hub.SystemDetails{OS: hub.OSFreeBSD}, want: "FreeBSD"},
+		{name: "a code Beszel does not define", d: hub.SystemDetails{OS: 9}, want: "unknown (os 9)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := osName(tt.d); got != tt.want {
+				t.Fatalf("osName = %q, want %q", got, tt.want)
 			}
 		})
 	}

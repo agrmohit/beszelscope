@@ -113,6 +113,10 @@ func TestFleetProblems(t *testing.T) {
 			want: []string{"web: status_down(0)@summary: down for 7m"},
 		},
 		{
+			name: "undefined status", in: FleetInput{Systems: []hub.System{{Name: "web", Status: "rebooting", Updated: ago(time.Hour)}}},
+			want: []string{`web: status_down(0)@summary: unknown status "rebooting"`},
+		},
+		{
 			name: "paused", in: FleetInput{Systems: []hub.System{{Name: "web", Status: "paused", Updated: ago(time.Hour)}}},
 			want: []string{"web: status_paused(0)@summary: monitoring paused"},
 		},
@@ -408,6 +412,7 @@ func TestFleetSelection(t *testing.T) {
 	all := []hub.System{healthy, broken, paused}
 	tests := []struct {
 		name       string
+		systems    []hub.System // all when nil
 		opts       FleetOptions
 		wantRows   []string
 		wantCounts Counts
@@ -434,11 +439,24 @@ func TestFleetSelection(t *testing.T) {
 			wantRows: []string{}, wantCounts: Counts{Total: 1, Up: 1},
 		},
 		{name: "unknown name", opts: FleetOptions{Systems: []string{"mail"}}, wantErr: true},
+		{
+			name: "pending and an undefined status are counted",
+			systems: []hub.System{
+				healthy,
+				{ID: "aaaaaaaaaaaaaa4", Name: "new", Status: hub.StatusPending, Updated: ago(time.Hour)},
+				{ID: "aaaaaaaaaaaaaa5", Name: "odd", Status: "rebooting", Updated: ago(time.Hour)},
+			},
+			wantRows: []string{"web", "new", "odd"}, wantCounts: Counts{Total: 3, Up: 1, Pending: 1, Unknown: 1, WithProblems: 2},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r, err := Fleet(FleetInput{Now: now, Systems: all}, tt.opts)
+			systems := all
+			if tt.systems != nil {
+				systems = tt.systems
+			}
+			r, err := Fleet(FleetInput{Now: now, Systems: systems}, tt.opts)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, want error %v", err, tt.wantErr)
 			}
@@ -587,7 +605,7 @@ func TestLastSeen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d, err := Detail(DetailInput{FleetInput: in, System: tt.sys}, DetailOptions{Sections: []string{SectionCore}})
+			d, err := Detail(DetailInput{FleetInput: in, System: tt.sys}, DetailOptions{Sections: []Section{SectionCore}})
 			if err != nil {
 				t.Fatal(err)
 			}

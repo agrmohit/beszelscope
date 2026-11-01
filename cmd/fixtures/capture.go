@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agrmohit/beszelscope/internal/hub"
+
 	"github.com/agrmohit/beszelscope/internal/fixtures"
 )
 
@@ -206,8 +208,8 @@ func capture(ctx context.Context, c *client) ([]rawFile, meta, error) {
 func pickSystems(systemsBody, containersBody []byte) (ids []string, full string, err error) {
 	var systems struct {
 		Items []struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
+			ID     string     `json:"id"`
+			Status hub.Status `json:"status"`
 		} `json:"items"`
 	}
 	var containers struct {
@@ -228,7 +230,7 @@ func pickSystems(systemsBody, containersBody []byte) (ids []string, full string,
 	best := -1
 	for _, s := range systems.Items {
 		ids = append(ids, s.ID)
-		if s.Status == "up" && count[s.ID] > best {
+		if s.Status == hub.StatusUp && count[s.ID] > best {
 			full, best = s.ID, count[s.ID]
 		}
 	}

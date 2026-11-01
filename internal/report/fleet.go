@@ -91,26 +91,27 @@ type Counts struct {
 	Down         int `json:"down"`
 	Paused       int `json:"paused"`
 	Pending      int `json:"pending"`
+	Unknown      int `json:"unknown,omitempty"` // a status Beszel does not define
 	WithProblems int `json:"with_problems"`
 }
 
 // Row is one system. Live metrics are present only while the system is up.
 type Row struct {
-	Name          string    `json:"name"`
-	Status        string    `json:"status"`
-	AgeS          *int64    `json:"age_s,omitempty"`
-	LastSeenAgoS  *int64    `json:"last_seen_ago_s,omitempty"`
-	CPUPct        *float64  `json:"cpu_pct,omitempty"`
-	MemPct        *float64  `json:"mem_pct,omitempty"`
-	DiskPct       *float64  `json:"disk_pct,omitempty"`
-	DiskWorst     string    `json:"disk_worst,omitempty"`
-	TempHottestC  *float64  `json:"temp_hottest_c,omitempty"`
-	LoadPerThread *float64  `json:"load_per_thread,omitempty"`
-	NetBytesPerS  *uint64   `json:"net_bytes_per_s,omitempty"`
-	UptimeS       *uint64   `json:"uptime_s,omitempty"`
-	Agent         string    `json:"agent,omitempty"`
-	Updates       *Updates  `json:"updates,omitempty"`
-	Problems      []Problem `json:"problems,omitempty"`
+	Name          string     `json:"name"`
+	Status        hub.Status `json:"status"`
+	AgeS          *int64     `json:"age_s,omitempty"`
+	LastSeenAgoS  *int64     `json:"last_seen_ago_s,omitempty"`
+	CPUPct        *float64   `json:"cpu_pct,omitempty"`
+	MemPct        *float64   `json:"mem_pct,omitempty"`
+	DiskPct       *float64   `json:"disk_pct,omitempty"`
+	DiskWorst     string     `json:"disk_worst,omitempty"`
+	TempHottestC  *float64   `json:"temp_hottest_c,omitempty"`
+	LoadPerThread *float64   `json:"load_per_thread,omitempty"`
+	NetBytesPerS  *uint64    `json:"net_bytes_per_s,omitempty"`
+	UptimeS       *uint64    `json:"uptime_s,omitempty"`
+	Agent         string     `json:"agent,omitempty"`
+	Updates       *Updates   `json:"updates,omitempty"`
+	Problems      []Problem  `json:"problems,omitempty"`
 }
 
 // Updates counts pending package updates; Security is null when unknown.
@@ -138,14 +139,16 @@ func Fleet(in FleetInput, o FleetOptions) (FleetResult, error) {
 		row := buildRow(in, s)
 		out.Counts.Total++
 		switch s.Status {
-		case "up":
+		case hub.StatusUp:
 			out.Counts.Up++
-		case "down":
+		case hub.StatusDown:
 			out.Counts.Down++
-		case "paused":
+		case hub.StatusPaused:
 			out.Counts.Paused++
-		case "pending":
+		case hub.StatusPending:
 			out.Counts.Pending++
+		default:
+			out.Counts.Unknown++
 		}
 		if len(row.Problems) > 0 {
 			out.Counts.WithProblems++
@@ -200,7 +203,7 @@ func TokenWarning(now, expires time.Time) []string {
 
 func buildRow(in FleetInput, s hub.System) Row {
 	row := Row{Name: s.Name, Status: s.Status}
-	if s.Status != "up" {
+	if s.Status != hub.StatusUp {
 		seen, none := in.lastSeen(s)
 		if !none {
 			row.LastSeenAgoS = new(ageS(in.Now, seen))
@@ -265,17 +268,19 @@ func (in FleetInput) lastSeen(s hub.System) (seen time.Time, none bool) {
 
 func statusProblem(s hub.System, now, seen time.Time, none bool) []Problem {
 	switch s.Status {
-	case "down":
+	case hub.StatusUp:
+		return nil
+	case hub.StatusDown:
 		if none {
 			return []Problem{problem(CodeStatusDown, "down, no data in the last 30 days", 0)}
 		}
 		return []Problem{problem(CodeStatusDown, "down for "+short(now.Sub(seen)), 0)}
-	case "paused":
+	case hub.StatusPaused:
 		return []Problem{problem(CodeStatusPaused, "monitoring paused", 0)}
-	case "pending":
+	case hub.StatusPending:
 		return []Problem{problem(CodeStatusPending, "agent has not connected", 0)}
 	default:
-		return []Problem{problem(CodeStatusDown, "unknown status "+strconv.Quote(s.Status), 0)}
+		return []Problem{problem(CodeStatusDown, "unknown status "+strconv.Quote(string(s.Status)), 0)}
 	}
 }
 
@@ -353,11 +358,13 @@ func structural(in FleetInput, s hub.System) []Problem {
 // smartProblem is the problem code for a drive's SMART state, or "".
 func smartProblem(d hub.SmartDevice) string {
 	switch d.State {
-	case "FAILED":
+	case hub.SmartFailed:
 		return CodeSmartFailed
-	case "WARNING":
+	case hub.SmartWarning:
 		return CodeSmartWarning
-	default:
+	case hub.SmartPassed, hub.SmartUnknown:
+		return ""
+	default: // a state the agent does not define is not a problem
 		return ""
 	}
 }

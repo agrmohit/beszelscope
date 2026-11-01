@@ -1,28 +1,31 @@
 package report
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/agrmohit/beszelscope/internal/hub"
 )
 
+// Section is a part of system_detail's answer.
+type Section string
+
 // Sections of system_detail, in the order of Beszel's system page tabs.
 const (
-	SectionSummary    = "summary"
-	SectionCore       = "core"
-	SectionNetwork    = "network"
-	SectionDisk       = "disk"
-	SectionGPU        = "gpu"
-	SectionContainers = "containers"
-	SectionServices   = "services"
-	SectionUpdates    = "updates"
+	SectionSummary    Section = "summary"
+	SectionCore       Section = "core"
+	SectionNetwork    Section = "network"
+	SectionDisk       Section = "disk"
+	SectionGPU        Section = "gpu"
+	SectionContainers Section = "containers"
+	SectionServices   Section = "services"
+	SectionUpdates    Section = "updates"
 )
 
 // Sections lists every section system_detail accepts.
-var Sections = []string{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices, SectionUpdates}
+var Sections = []Section{SectionSummary, SectionCore, SectionNetwork, SectionDisk, SectionGPU, SectionContainers, SectionServices, SectionUpdates}
 
 // DetailInput is everything system_detail reads for one system, already
 // fetched. FleetInput carries the problem sources the summary needs.
@@ -42,12 +45,12 @@ type DetailInput struct {
 
 // DetailOptions picks what system_detail returns.
 type DetailOptions struct {
-	Sections []string // empty means summary only
+	Sections []Section // empty means summary only
 	// The list knobs shape containers and services only.
 	Filter       string // case-insensitive substring of a name or container image; "" keeps all
 	ProblemsOnly bool
-	Sort         string // SortCPU (when ""), SortMem or SortName
-	Limit        int    // rows per list beyond problem rows; 0 means DefaultLimit
+	Sort         SortKey // SortCPU when ""
+	Limit        int     // rows per list beyond problem rows; 0 means DefaultLimit
 }
 
 // DetailResult is the system_detail output. Only requested sections are set.
@@ -68,10 +71,10 @@ type DetailResult struct {
 
 // SystemRef names the system and how fresh its data is.
 type SystemRef struct {
-	Name         string `json:"name"`
-	Status       string `json:"status"`
-	AgeS         *int64 `json:"age_s,omitempty"`
-	LastSeenAgoS *int64 `json:"last_seen_ago_s,omitempty"`
+	Name         string     `json:"name"`
+	Status       hub.Status `json:"status"`
+	AgeS         *int64     `json:"age_s,omitempty"`
+	LastSeenAgoS *int64     `json:"last_seen_ago_s,omitempty"`
 }
 
 // Summary is Beszel's info bar plus the fleet row's numbers and problems.
@@ -147,8 +150,9 @@ type Swap struct {
 
 // Detail builds the system_detail result for in.System.
 func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
-	if o.Sort != "" && !slices.Contains(Sorts, o.Sort) {
-		return DetailResult{}, fmt.Errorf("unknown sort %q; want one of %s", o.Sort, strings.Join(Sorts, ", "))
+	o.Sort = cmp.Or(o.Sort, SortCPU)
+	if !slices.Contains(Sorts, o.Sort) {
+		return DetailResult{}, fmt.Errorf("unknown sort %q; want one of %s", o.Sort, joinNames(Sorts))
 	}
 	if o.Limit < 0 || o.Limit > MaxLimit {
 		return DetailResult{}, fmt.Errorf("limit %d out of range 1-%d", o.Limit, MaxLimit)
@@ -166,7 +170,7 @@ func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
 
 	sections := o.Sections
 	if len(sections) == 0 {
-		sections = []string{SectionSummary}
+		sections = []Section{SectionSummary}
 	}
 	for _, sec := range sections {
 		switch sec {
@@ -191,7 +195,7 @@ func Detail(in DetailInput, o DetailOptions) (DetailResult, error) {
 		case SectionUpdates:
 			out.Updates = updates(in)
 		default:
-			return DetailResult{}, fmt.Errorf("unknown section %q; want one of %s", sec, strings.Join(Sections, ", "))
+			return DetailResult{}, fmt.Errorf("unknown section %q; want one of %s", sec, joinNames(Sections))
 		}
 	}
 	return out, nil
@@ -203,7 +207,7 @@ func summary(in DetailInput, row Row) *Summary {
 		out.OS, out.Kernel, out.Hostname, out.Arch = osName(*d), d.Kernel, d.Hostname, d.Arch
 		out.CPUModel, out.Cores, out.Threads, out.MemTotalBytes = d.CPU, d.Cores, d.Threads, d.Memory
 	}
-	if in.System.Status != "up" {
+	if in.System.Status != hub.StatusUp {
 		return out
 	}
 	i := in.System.Info
@@ -292,7 +296,7 @@ func statsUnavailable(in DetailInput) string {
 
 // unavailable explains why live data is missing, or is "" for an up system.
 func (in FleetInput) unavailable(s hub.System) string {
-	if s.Status == "up" {
+	if s.Status == hub.StatusUp {
 		return ""
 	}
 	seen, none := in.lastSeen(s)
@@ -304,7 +308,7 @@ func (in FleetInput) unavailable(s hub.System) string {
 
 func versionSkew(s hub.System, hubVersion string) string {
 	v := s.Info.AgentVersion
-	if s.Status != "up" || hubVersion == "" || v == "" || v == hubVersion {
+	if s.Status != hub.StatusUp || hubVersion == "" || v == "" || v == hubVersion {
 		return ""
 	}
 	return fmt.Sprintf("%s runs agent %s; hub is %s", s.Name, v, hubVersion)
@@ -315,16 +319,16 @@ func osName(d hub.SystemDetails) string {
 		return d.OSName
 	}
 	switch d.OS {
-	case 0:
+	case hub.OSLinux:
 		return "Linux"
-	case 1:
+	case hub.OSDarwin:
 		return "macOS"
-	case 2:
+	case hub.OSWindows:
 		return "Windows"
-	case 3:
+	case hub.OSFreeBSD:
 		return "FreeBSD"
 	default:
-		return ""
+		return fmt.Sprintf("unknown (os %d)", d.OS)
 	}
 }
 
@@ -348,7 +352,7 @@ func loadAvg(la [3]float64) []float64 {
 	}
 	out := make([]float64, 0, len(la))
 	for _, v := range la {
-		out = append(out, deref(round(v, 2)))
+		out = append(out, roundTo(v, 2))
 	}
 	return out
 }

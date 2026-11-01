@@ -19,9 +19,6 @@ const renewID = "renew_token"
 // canElicit reports whether the client accepts elicitation in mode ("form"
 // or "url"). An empty elicitation capability means form, per the spec.
 func canElicit(req *mcp.CallToolRequest, mode string) bool {
-	if req == nil {
-		return false
-	}
 	caps := req.ClientCapabilities()
 	if caps == nil || caps.Elicitation == nil {
 		return false
@@ -34,9 +31,6 @@ func canElicit(req *mcp.CallToolRequest, mode string) bool {
 }
 
 func answer(req *mcp.CallToolRequest, id string) (*mcp.ElicitResult, bool) {
-	if req == nil || req.Params == nil {
-		return nil, false
-	}
 	r, ok := req.Params.InputResponses[id].(*mcp.ElicitResult)
 	return r, ok
 }

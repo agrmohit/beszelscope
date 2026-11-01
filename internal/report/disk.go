@@ -64,17 +64,17 @@ type VdevRow struct {
 
 // SmartRow is one drive's SMART summary.
 type SmartRow struct {
-	Name              string        `json:"name"`
-	Model             string        `json:"model,omitempty"`
-	Type              string        `json:"type,omitempty"`
-	State             string        `json:"state"` // PASSED, WARNING, FAILED or UNKNOWN
-	CapacityBytes     uint64        `json:"capacity_bytes,omitempty"`
-	TempC             *float64      `json:"temp_c,omitempty"`
-	PowerOnHours      uint64        `json:"power_on_hours,omitempty"`
-	PowerCycles       uint64        `json:"power_cycles,omitempty"`
-	FailingAttributes []FailingAttr `json:"failing_attributes,omitempty"`
-	CheckedAgoS       *int64        `json:"checked_ago_s,omitempty"`
-	Problems          []string      `json:"problems,omitempty"`
+	Name              string         `json:"name"`
+	Model             string         `json:"model,omitempty"`
+	Type              string         `json:"type,omitempty"`
+	State             hub.SmartState `json:"state"`
+	CapacityBytes     uint64         `json:"capacity_bytes,omitempty"`
+	TempC             *float64       `json:"temp_c,omitempty"`
+	PowerOnHours      uint64         `json:"power_on_hours,omitempty"`
+	PowerCycles       uint64         `json:"power_cycles,omitempty"`
+	FailingAttributes []FailingAttr  `json:"failing_attributes,omitempty"`
+	CheckedAgoS       *int64         `json:"checked_ago_s,omitempty"`
+	Problems          []string       `json:"problems,omitempty"`
 }
 
 // FailingAttr is a SMART attribute that has failed.

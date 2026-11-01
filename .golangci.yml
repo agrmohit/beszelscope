@@ -24,6 +24,9 @@ linters:
     - wrapcheck     # errors wrapped at package boundaries
 
   settings:
+    exhaustive:
+      check: [switch] # map literals are often partial sets; not checked
+      default-signifies-exhaustive: false # a default does not excuse a missing constant
     forbidigo:
       analyze-types: true
       forbid:

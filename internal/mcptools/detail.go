@@ -37,12 +37,12 @@ const detailDescription = "Current detail for one server monitored by the Beszel
 	"Values are the latest 60 s poll; for trends use metric_history."
 
 type detailIn struct {
-	System       string   `json:"system" jsonschema:"The server, by name or ID. Names are case-insensitive and a unique prefix works; an unknown or ambiguous name returns an error listing the valid ones."`
-	Sections     []string `json:"sections,omitempty" jsonschema:"Sections to return; omit for summary only."`
-	Filter       string   `json:"filter,omitempty" jsonschema:"Keep containers whose name or image, and services whose name, contains this text, ignoring case."`
-	ProblemsOnly bool     `json:"problems_only,omitempty" jsonschema:"Keep only unhealthy containers and failed services."`
-	Sort         string   `json:"sort,omitempty" jsonschema:"Order of containers and services after problem rows: cpu (highest first; when omitted), mem (highest first) or name."`
-	Limit        int      `json:"limit,omitempty" jsonschema:"Most containers and services rows to return besides problem rows; 25 when omitted."`
+	System       string           `json:"system" jsonschema:"The server, by name or ID. Names are case-insensitive and a unique prefix works; an unknown or ambiguous name returns an error listing the valid ones."`
+	Sections     []report.Section `json:"sections,omitempty" jsonschema:"Sections to return; omit for summary only."`
+	Filter       string           `json:"filter,omitempty" jsonschema:"Keep containers whose name or image, and services whose name, contains this text, ignoring case."`
+	ProblemsOnly bool             `json:"problems_only,omitempty" jsonschema:"Keep only unhealthy containers and failed services."`
+	Sort         report.SortKey   `json:"sort,omitempty" jsonschema:"Order of containers and services after problem rows: cpu (highest first; when omitted), mem (highest first) or name."`
+	Limit        int              `json:"limit,omitempty" jsonschema:"Most containers and services rows to return besides problem rows; 25 when omitted."`
 }
 
 // latestWithin bounds how old the newest stats sample may be. Agents report
@@ -57,7 +57,7 @@ func addDetail(s *mcp.Server, t *tools) {
 	sections := in.Properties["sections"]
 	sections.Items.Enum = make([]any, len(report.Sections))
 	for i, name := range report.Sections {
-		sections.Items.Enum[i] = name
+		sections.Items.Enum[i] = string(name) // validation compares the decoded JSON, a string
 	}
 	sections.Types, sections.Type = nil, "array" // not ["null","array"]
 	sections.UniqueItems = true
@@ -65,7 +65,7 @@ func addDetail(s *mcp.Server, t *tools) {
 	sort := in.Properties["sort"]
 	sort.Enum = make([]any, len(report.Sorts))
 	for i, name := range report.Sorts {
-		sort.Enum[i] = name
+		sort.Enum[i] = string(name)
 	}
 	limit := in.Properties["limit"]
 	limit.Minimum, limit.Maximum = new(1.0), new(float64(report.MaxLimit))
@@ -96,7 +96,7 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 		},
 		System: sys,
 	}
-	want := func(section string) bool {
+	want := func(section report.Section) bool {
 		return len(in.Sections) == 0 && section == report.SectionSummary || slices.Contains(in.Sections, section)
 	}
 	// A list section reports its own failed read; only the summary's
@@ -109,7 +109,7 @@ func (t *tools) detail(ctx context.Context, req *mcp.CallToolRequest, in detailI
 	}
 	// Each source is read once, and only for the sections that use it.
 	var fe fetcher
-	up := sys.Status == "up"
+	up := sys.Status == hub.StatusUp
 	if !up {
 		t.lastSeen(ctx, &fe, sys, &input.FleetInput)
 	}

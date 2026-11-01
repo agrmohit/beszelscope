@@ -11,17 +11,33 @@ import (
 	"github.com/agrmohit/beszelscope/internal/hub"
 )
 
-// List knob values for containers and services.
+// SortKey orders containers and services after their problem rows.
+type SortKey string
+
+// The orders system_detail accepts.
 const (
-	SortCPU      = "cpu"
-	SortMem      = "mem"
-	SortName     = "name"
+	SortCPU  SortKey = "cpu"
+	SortMem  SortKey = "mem"
+	SortName SortKey = "name"
+)
+
+// List limits for containers and services.
+const (
 	DefaultLimit = 25
 	MaxLimit     = 200
 )
 
 // Sorts lists every sort system_detail accepts.
-var Sorts = []string{SortCPU, SortMem, SortName}
+var Sorts = []SortKey{SortCPU, SortMem, SortName}
+
+// joinNames lists enum values for an error message.
+func joinNames[T ~string](vs []T) string {
+	names := make([]string, len(vs))
+	for i, v := range vs {
+		names[i] = string(v)
+	}
+	return strings.Join(names, ", ")
+}
 
 // GPUs is Beszel's GPU tab.
 type GPUs struct {
@@ -258,8 +274,8 @@ func pick[T any](rows []T, o DetailOptions, what string, key func(T) listKey) ([
 		switch o.Sort {
 		case SortMem:
 			c = cmp.Compare(kb.mem, ka.mem)
-		case SortName:
-		default:
+		case SortName: // the name tie-break below decides
+		case SortCPU:
 			c = cmp.Compare(kb.cpu, ka.cpu)
 		}
 		return cmp.Or(c, strings.Compare(ka.name, kb.name))

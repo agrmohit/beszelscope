@@ -63,13 +63,47 @@ type Info struct {
 	Version string `json:"v"`
 }
 
+// Status is a system's state as Beszel reports it. Other values can arrive
+// on the wire; switches name all four and handle the rest in a default.
+type Status string
+
+// The statuses Beszel sets.
+const (
+	StatusUp      Status = "up"
+	StatusDown    Status = "down"
+	StatusPaused  Status = "paused"
+	StatusPending Status = "pending"
+)
+
+// OS is Beszel's operating system code.
+type OS int
+
+// The OS codes Beszel defines.
+const (
+	OSLinux   OS = 0
+	OSDarwin  OS = 1
+	OSWindows OS = 2
+	OSFreeBSD OS = 3
+)
+
+// SmartState is a drive's overall SMART result.
+type SmartState string
+
+// The SMART results the agent reports.
+const (
+	SmartPassed  SmartState = "PASSED"
+	SmartWarning SmartState = "WARNING"
+	SmartFailed  SmartState = "FAILED"
+	SmartUnknown SmartState = "UNKNOWN"
+)
+
 // System is a monitored host with its latest summary.
 type System struct {
 	ID      string     `json:"id"`
 	Name    string     `json:"name"`
 	Host    string     `json:"host"`
 	Port    string     `json:"port"`
-	Status  string     `json:"status"` // up, down, paused or pending
+	Status  Status     `json:"status"`
 	Info    SystemInfo `json:"info"`
 	Updated Time       `json:"updated"`
 }
@@ -97,7 +131,7 @@ type SystemInfo struct {
 type SystemDetails struct {
 	System   string `json:"system"`
 	Hostname string `json:"hostname"`
-	OS       int    `json:"os"` // 0 Linux, 1 Darwin, 2 Windows, 3 FreeBSD
+	OS       OS     `json:"os"`
 	OSName   string `json:"os_name"`
 	Kernel   string `json:"kernel"`
 	CPU      string `json:"cpu"`
@@ -245,7 +279,7 @@ type SmartDevice struct {
 	Name       string      `json:"name"`
 	Model      string      `json:"model"`
 	Type       string      `json:"type"`
-	State      string      `json:"state"`    // PASSED, WARNING, FAILED or UNKNOWN
+	State      SmartState  `json:"state"`
 	Capacity   uint64      `json:"capacity"` // bytes
 	Temp       float64     `json:"temp"`
 	Hours      uint64      `json:"hours"`
